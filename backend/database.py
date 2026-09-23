@@ -2,7 +2,7 @@
 
 Provides dual-engine compatibility for SQLite (local development) and
 PostgreSQL (Render managed database), including pooled connections, dynamic schema
-initialization, safe sequential column migrations, and automatic seed data generation.
+initialization, safe sequential column migrations, and cross-engine boolean compatibility.
 """
 
 import os
@@ -192,7 +192,7 @@ def init_db() -> None:
         cursor = conn.cursor()
 
         # ---------------------------------------------------------
-        # PHASE 1: Base Table Creation (Indexes omitted intentionally)
+        # PHASE 1: Base Table Creation
         # ---------------------------------------------------------
         if IS_POSTGRES:
             table_statements = [
@@ -216,8 +216,8 @@ def init_db() -> None:
                     department VARCHAR(100),
                     semester INT DEFAULT 1,
                     bio TEXT DEFAULT '',
-                    phone_verified SMALLINT DEFAULT 0,
-                    email_verified SMALLINT DEFAULT 0,
+                    phone_verified BOOLEAN DEFAULT FALSE,
+                    email_verified BOOLEAN DEFAULT FALSE,
                     approval_status VARCHAR(50) DEFAULT 'PENDING',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
@@ -268,8 +268,8 @@ def init_db() -> None:
                     department TEXT,
                     semester INTEGER DEFAULT 1,
                     bio TEXT DEFAULT '',
-                    phone_verified INTEGER DEFAULT 0,
-                    email_verified INTEGER DEFAULT 0,
+                    phone_verified BOOLEAN DEFAULT 0,
+                    email_verified BOOLEAN DEFAULT 0,
                     approval_status TEXT DEFAULT 'PENDING',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
@@ -305,18 +305,19 @@ def init_db() -> None:
             cursor.execute(stmt.strip())
 
         # ---------------------------------------------------------
-        # PHASE 2: Dynamic Column Migrations (Precedes index creation)
+        # PHASE 2: Dynamic Column Migrations
         # ---------------------------------------------------------
         _ensure_column_exists(cursor, "students", "full_name", "VARCHAR(150) DEFAULT ''")
         _ensure_column_exists(cursor, "students", "name", "VARCHAR(150) DEFAULT ''")
         _ensure_column_exists(cursor, "students", "department", "VARCHAR(100) DEFAULT 'General'")
         _ensure_column_exists(cursor, "students", "semester", "INT DEFAULT 1")
         _ensure_column_exists(cursor, "students", "bio", "TEXT DEFAULT ''")
-        _ensure_column_exists(cursor, "students", "phone_verified", "SMALLINT DEFAULT 0")
-        _ensure_column_exists(cursor, "students", "email_verified", "SMALLINT DEFAULT 0")
+        bool_type = "BOOLEAN DEFAULT FALSE" if IS_POSTGRES else "BOOLEAN DEFAULT 0"
+        _ensure_column_exists(cursor, "students", "phone_verified", bool_type)
+        _ensure_column_exists(cursor, "students", "email_verified", bool_type)
         _ensure_column_exists(cursor, "students", "approval_status", "VARCHAR(50) DEFAULT 'PENDING'")
 
-        # Sync legacy 'name' column to 'full_name' if upgrading an existing database
+        # Sync legacy 'name' column to 'full_name' if needed
         try:
             cursor.execute("""
                 UPDATE students 
@@ -327,7 +328,7 @@ def init_db() -> None:
             pass
 
         # ---------------------------------------------------------
-        # PHASE 3: Create Indexes (Safe: columns are guaranteed to exist)
+        # PHASE 3: Create Indexes
         # ---------------------------------------------------------
         index_statements = [
             "CREATE INDEX IF NOT EXISTS idx_students_email ON students(email);",
@@ -341,7 +342,7 @@ def init_db() -> None:
             cursor.execute(idx.strip())
 
         # ---------------------------------------------------------
-        # PHASE 4: Automated Seed Data (Idempotent)
+        # PHASE 4: Automated Seed Data (Using Python True/False)
         # ---------------------------------------------------------
         cursor.execute("SELECT COUNT(*) as count FROM students;")
         st_count_row = cursor.fetchone()
@@ -357,8 +358,8 @@ def init_db() -> None:
                     "Computer Science",
                     8,
                     "AI Systems Architect & Founder focusing on Agentic AI, EDA, and Kernel Drivers.",
-                    1,
-                    1,
+                    True,
+                    True,
                     "APPROVED"
                 ),
                 (
@@ -369,8 +370,8 @@ def init_db() -> None:
                     "Artificial Intelligence",
                     6,
                     "Specializing in small language models, quantization, and ONNX Runtime execution.",
-                    1,
-                    1,
+                    True,
+                    True,
                     "APPROVED"
                 ),
                 (
@@ -381,9 +382,9 @@ def init_db() -> None:
                     "Electronics",
                     6,
                     "Embedded Linux engineer researching real-time kernel optimizations and Yocto.",
-                    1,
-                    1,
-                    "APPROVED"
+                    True,
+                    False,
+                    "PENDING"
                 ),
                 (
                     "Ananya Patel",
@@ -393,9 +394,9 @@ def init_db() -> None:
                     "Information Tech",
                     4,
                     "Student focusing on distributed databases, vector indexes, and microservices.",
-                    1,
-                    1,
-                    "APPROVED"
+                    False,
+                    False,
+                    "REJECTED"
                 ),
             ]
             cursor.executemany("""
