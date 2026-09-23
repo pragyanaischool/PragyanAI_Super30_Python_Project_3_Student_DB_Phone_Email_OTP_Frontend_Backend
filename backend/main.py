@@ -22,26 +22,30 @@ try:
     from backend.services.otp_service import OTPService
     from backend.services.twilio_service import TwilioService
     from backend.services.email_service import EmailService
+    from backend.routers.student_portal import router as student_router
+    from backend.routers.admin_portal import router as admin_router
 except ImportError:
     from config import settings
     from database import init_db, get_db
     from services.otp_service import OTPService
     from services.twilio_service import TwilioService
     from services.email_service import EmailService
+    from routers.student_portal import router as student_router
+    from routers.admin_portal import router as admin_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Ensure database tables and indexes exist on application startup."""
+    """Ensure database tables, sample data, and indexes exist on application startup."""
     init_db()
     yield
 
 
 # Initialize FastAPI Application
 app = FastAPI(
-    title="Student DB & OTP Verification API",
-    description="Backend API for student registration, Twilio SMS/Email verification, and analytics.",
-    version="2.2.0",
+    title="Student DB & Academic Management Portal API",
+    description="Backend API for student registration, verification, student self-service portal, and admin governance.",
+    version="2.3.0",
     lifespan=lifespan,
 )
 
@@ -55,6 +59,8 @@ ALLOWED_ORIGINS = [
     "http://127.0.0.1:5500",
     "http://localhost:8000",
     "http://127.0.0.1:8000",
+    "http://localhost:7860",
+    "http://127.0.0.1:7860",
     "*",
 ]
 
@@ -163,17 +169,17 @@ def register_student(student: StudentCreate):
                 detail="A student with this email or phone number is already registered."
             )
 
-        # Insert new record
+        # Insert new record (sets approval_status to 'PENDING' by default)
         cursor.execute("""
-            INSERT INTO students (name, email, phone, department, semester)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO students (full_name, email, phone, department, semester, approval_status)
+            VALUES (?, ?, ?, ?, ?, 'PENDING')
         """, (student.name.strip(), email_clean, phone_clean, student.department.strip(), student.semester))
 
     # Generate and record verification OTPs
     phone_otp = otp_service.generate_otp(phone_clean)
     email_otp = otp_service.generate_otp(email_clean)
 
-    # Dispatch alerts via Twilio and SMTP
+    # Dispatch alerts via Twilio and Brevo
     sms_sent = twilio_service.send_sms(
         to_phone=phone_clean,
         message=f"Your verification code is: {phone_otp}. Valid for 5 minutes."
@@ -234,12 +240,12 @@ def resend_phone_otp(payload: ResendOTPRequest):
 
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, name, phone_verified FROM students WHERE phone = ?", (phone_clean,))
+        cursor.execute("SELECT id, full_name, phone_verified FROM students WHERE phone = ?", (phone_clean,))
         student = cursor.fetchone()
 
         if not student:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student with this phone number not found.")
-        if student.get("phone_verified") == 1:
+        if student["phone_verified"] == 1:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This phone number is already verified.")
 
     phone_otp = otp_service.generate_otp(phone_clean)
@@ -264,12 +270,12 @@ def resend_email_otp(payload: ResendOTPRequest):
 
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id, name, email_verified FROM students WHERE email = ?", (email_clean,))
+        cursor.execute("SELECT id, full_name, email_verified FROM students WHERE email = ?", (email_clean,))
         student = cursor.fetchone()
 
         if not student:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student with this email address not found.")
-        if student.get("email_verified") == 1:
+        if student["email_verified"] == 1:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This email address is already verified.")
 
     email_otp = otp_service.generate_otp(email_clean)
@@ -277,7 +283,7 @@ def resend_email_otp(payload: ResendOTPRequest):
     mail_sent = email_service.send_email(
         to_email=email_clean,
         subject="Student Portal Verification Code (Resend)",
-        content=f"Hello {student['name']},\n\nYour new portal OTP is: {email_otp}\n\nValid for 5 minutes."
+        content=f"Hello {student['full_name']},\n\nYour new portal OTP is: {email_otp}\n\nValid for 5 minutes."
     )
 
     return {
@@ -297,7 +303,6 @@ def get_analytics():
     with get_db() as conn:
         cur = conn.cursor()
 
-        # Aggregate counts
         cur.execute("SELECT COUNT(*) AS count FROM students")
         row = cur.fetchone()
         total_students = row["count"] if row else 0
@@ -310,7 +315,6 @@ def get_analytics():
         row = cur.fetchone()
         partially_verified = row["count"] if row else 0
 
-        # Breakdown by department
         cur.execute("""
             SELECT department, COUNT(*) AS count 
             FROM students 
@@ -319,7 +323,6 @@ def get_analytics():
         """)
         dept_distribution = {r["department"]: r["count"] for r in cur.fetchall()}
 
-        # Verification matrix
         cur.execute("""
             SELECT 
                 SUM(CASE WHEN phone_verified = 1 AND email_verified = 1 THEN 1 ELSE 0 END) AS both_ok,
@@ -330,7 +333,6 @@ def get_analytics():
         """)
         v_row = cur.fetchone() or {}
 
-        # Registration trends (dual-engine compatible DATE casting)
         cur.execute("""
             SELECT CAST(created_at AS DATE) AS reg_date, COUNT(*) AS count 
             FROM students 
@@ -376,7 +378,7 @@ def get_students(
 
     if search:
         search_clean = search.strip()
-        where_clauses.append("(name LIKE ? OR email LIKE ? OR phone LIKE ?)")
+        where_clauses.append("(full_name LIKE ? OR email LIKE ? OR phone LIKE ?)")
         term = f"%{search_clean}%"
         params.extend([term, term, term])
 
@@ -394,21 +396,19 @@ def get_students(
     with get_db() as conn:
         cur = conn.cursor()
 
-        # Total matching records count
         cur.execute(f"SELECT COUNT(*) AS count FROM students WHERE {where_sql}", params)
         count_row = cur.fetchone()
         total_records = count_row["count"] if count_row else 0
 
-        # Paginated query
         cur.execute(f"""
-            SELECT id, name, email, phone, department, semester, phone_verified, email_verified, created_at
+            SELECT id, full_name, email, phone, department, semester, phone_verified, email_verified, approval_status, created_at
             FROM students
             WHERE {where_sql}
             ORDER BY id DESC
             LIMIT ? OFFSET ?
         """, (*params, limit, offset))
 
-        students = cur.fetchall()
+        students = [dict(r) for r in cur.fetchall()]
 
     total_pages = (total_records + limit - 1) // limit if total_records > 0 else 1
 
@@ -419,6 +419,13 @@ def get_students(
         "total_pages": total_pages,
         "students": students
     }
+
+
+# ---------------------------------------------------------
+# Modular Routers Mounting (Student Portal & Admin Portal)
+# ---------------------------------------------------------
+app.include_router(student_router)
+app.include_router(admin_router)
 
 
 # ---------------------------------------------------------
