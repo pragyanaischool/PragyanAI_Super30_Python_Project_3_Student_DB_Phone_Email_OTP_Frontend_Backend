@@ -2,7 +2,8 @@
 
 Provides dual-engine compatibility for SQLite (local development) and
 PostgreSQL (Render managed database), including pooled connections, dynamic schema
-initialization, safe sequential column migrations, and legacy column constraint relaxation.
+initialization, safe sequential column migrations, legacy column relaxation,
+and dynamic foreign key seed resolution.
 """
 
 import os
@@ -187,13 +188,11 @@ def _ensure_column_exists(cursor: UnifiedCursor, table: str, column: str, col_ty
 
 def _relax_legacy_not_null_constraints(cursor: UnifiedCursor):
     """Relaxes NOT NULL constraints on legacy columns (e.g. college_name, usn, branch)
-
     in existing PostgreSQL instances so new modular inserts do not fail.
     """
     if not IS_POSTGRES:
         return
 
-    # List of known active non-null columns that must stay NOT NULL
     protected_columns = {"id", "email", "phone"}
 
     try:
@@ -333,7 +332,7 @@ def init_db() -> None:
             cursor.execute(stmt.strip())
 
         # ---------------------------------------------------------
-        # PHASE 2: Dynamic Column Migrations & Legacy Constraint Fixes
+        # PHASE 2: Dynamic Column Migrations & Constraint Relaxation
         # ---------------------------------------------------------
         _ensure_column_exists(cursor, "students", "full_name", "VARCHAR(150) DEFAULT ''")
         _ensure_column_exists(cursor, "students", "name", "VARCHAR(150) DEFAULT ''")
@@ -345,10 +344,10 @@ def init_db() -> None:
         _ensure_column_exists(cursor, "students", "email_verified", bool_type)
         _ensure_column_exists(cursor, "students", "approval_status", "VARCHAR(50) DEFAULT 'PENDING'")
 
-        # Drop NOT NULL constraints from old unused columns (e.g. college_name)
+        # Drop legacy NOT NULL constraints from abandoned columns
         _relax_legacy_not_null_constraints(cursor)
 
-        # Sync legacy 'name' column to 'full_name' if present
+        # Sync legacy 'name' column to 'full_name' if needed
         try:
             cursor.execute("""
                 UPDATE students 
@@ -373,7 +372,7 @@ def init_db() -> None:
             cursor.execute(idx.strip())
 
         # ---------------------------------------------------------
-        # PHASE 4: Automated Seed Data (Using Python True/False)
+        # PHASE 4: Automated Seed Data (Dynamic Foreign Key Resolution)
         # ---------------------------------------------------------
         cursor.execute("SELECT COUNT(*) as count FROM students;")
         st_count_row = cursor.fetchone()
@@ -467,21 +466,57 @@ def init_db() -> None:
                 ) VALUES (?, ?, ?, ?, ?, ?);
             """, sample_sessions)
 
-        # Check attendance table
+        # Check attendance table and seed using ACTUAL queried IDs
         cursor.execute("SELECT COUNT(*) as count FROM attendance;")
         att_count_row = cursor.fetchone()
         att_count = att_count_row.get("count", 0) if att_count_row else 0
 
         if att_count == 0:
-            sample_attendance = [
-                (1, 1, "PRESENT", "Active participant during live Q&A and code walkthrough."),
-                (1, 2, "SUBMITTED", "Submitted via student portal; verification pending.")
-            ]
-            cursor.executemany("""
-                INSERT INTO attendance (
-                    session_id, student_id, status, remarks
-                ) VALUES (?, ?, ?, ?);
-            """, sample_attendance)
+            cursor.execute("SELECT id FROM sessions ORDER BY id ASC LIMIT 2;")
+            available_sessions = [r["id"] for r in cursor.fetchall()]
+
+            cursor.execute("SELECT id FROM students WHERE approval_status = 'APPROVED' ORDER BY id ASC LIMIT 2;")
+            available_students = [r["id"] for r in cursor.fetchall()]
+
+            # Fall back to any student if none are explicitly marked APPROVED yet
+            if not available_students:
+                cursor.execute("SELECT id FROM students ORDER BY id ASC LIMIT 2;")
+                available_students = [r["id"] for r in cursor.fetchall()]
+
+            if available_sessions and available_students:
+                sample_attendance = []
+                s_id = available_sessions[0]
+                
+                # First student marked PRESENT
+                sample_attendance.append((
+                    s_id, 
+                    available_students[0], 
+                    "PRESENT", 
+                    "Active participant during live Q&A and code walkthrough."
+                ))
+                
+                # Second student (if available) marked SUBMITTED
+                if len(available_students) > 1:
+                    sample_attendance.append((
+                        s_id, 
+                        available_students[1], 
+                        "SUBMITTED", 
+                        "Submitted via student portal; verification pending."
+                    ))
+
+                if IS_POSTGRES:
+                    cursor.executemany("""
+                        INSERT INTO attendance (
+                            session_id, student_id, status, remarks
+                        ) VALUES (?, ?, ?, ?)
+                        ON CONFLICT (session_id, student_id) DO NOTHING;
+                    """, sample_attendance)
+                else:
+                    cursor.executemany("""
+                        INSERT OR IGNORE INTO attendance (
+                            session_id, student_id, status, remarks
+                        ) VALUES (?, ?, ?, ?);
+                    """, sample_attendance)
 
 
 @contextmanager
