@@ -18,7 +18,9 @@
       </div>
       <nav class="nav-links">
         <button class="nav-btn active" id="btn-admin-tab" onclick="switchTab('admin-tab')">📊 Admin Analytics</button>
+        <button class="nav-btn" id="btn-admin-gov-tab" onclick="switchTab('admin-gov-tab')">🛡️ Admin Governance</button>
         <button class="nav-btn" id="btn-student-tab" onclick="switchTab('student-tab')">🎓 Student Portal</button>
+        <button class="nav-btn" id="btn-register-tab" onclick="switchTab('register-tab')">📝 Register & Verify</button>
       </nav>
       <div class="user-profile">
         <div class="avatar">AD</div>
@@ -32,8 +34,11 @@
     <!-- Main Content Area -->
     <main class="content">
 
+      <!-- Global Notification Banner -->
+      <div id="status-banner" class="notify hidden" style="margin-bottom: 20px;"></div>
+
       <!-- ======================================================== -->
-      <!-- TAB 1: ADMIN ANALYTICS & STUDENT DIRECTORY -->
+      <!-- TAB 1: ADMIN ANALYTICS & STUDENT DIRECTORY               -->
       <!-- ======================================================== -->
       <section id="admin-tab" class="tab-pane active">
         <header class="topbar">
@@ -138,9 +143,260 @@
       </section>
 
       <!-- ======================================================== -->
-      <!-- TAB 2: STUDENT PORTAL (REGISTRATION & OTP VERIFICATION) -->
+      <!-- TAB 2: ADMIN GOVERNANCE (ONBOARDING, SESSIONS, ATTENDANCE) -->
       <!-- ======================================================== -->
-      <section id="student-tab" class="tab-pane">
+      <section id="admin-gov-tab" class="tab-pane hidden">
+        <header class="topbar">
+          <div>
+            <h1>Administrative Academic Oversight</h1>
+            <p class="subtext">Manage student onboarding, publish curriculum sessions, and verify attendance</p>
+          </div>
+          <button class="btn btn-primary" onclick="loadAdminOnboarding(); loadAdminSessions(); loadAdminAttendanceAnalytics();">🔄 Refresh</button>
+        </header>
+
+        <!-- 1. Student Onboarding Approvals -->
+        <div class="card table-card" style="margin-bottom: 24px;">
+          <div class="table-header">
+            <h3>1. Student Onboarding Approvals</h3>
+            <div class="filters">
+              <select id="admin-onboarding-filter" onchange="loadAdminOnboarding()">
+                <option value="PENDING">Pending Approval Only</option>
+                <option value="APPROVED">Approved Only</option>
+                <option value="REJECTED">Rejected Only</option>
+                <option value="ALL">All Applicants</option>
+              </select>
+              <button class="btn btn-secondary btn-sm" onclick="loadAdminOnboarding()">Reload</button>
+            </div>
+          </div>
+
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Student Name</th>
+                  <th>Email Address</th>
+                  <th>Phone Number</th>
+                  <th>Verified?</th>
+                  <th>Approval Status</th>
+                  <th style="text-align: right;">Action</th>
+                </tr>
+              </thead>
+              <tbody id="admin-onboarding-tbody">
+                <tr><td colspan="7" class="text-center">Loading applications...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 2. Publish New Academic Session -->
+        <div class="card" style="margin-bottom: 24px;">
+          <h3>2. Create & Publish Training Session</h3>
+          <p class="subtext" style="margin-bottom: 16px;">Schedule lectures, interactive labs, or live mentoring workshops</p>
+          
+          <div class="form-row">
+            <div class="form-group" style="flex: 2;">
+              <label for="new-sess-topic">Session Topic</label>
+              <input type="text" id="new-sess-topic" placeholder="e.g. Distributed Agentic Systems & LangGraph">
+            </div>
+            <div class="form-group">
+              <label for="new-sess-date">Date (YYYY-MM-DD)</label>
+              <input type="date" id="new-sess-date">
+            </div>
+            <div class="form-group">
+              <label for="new-sess-time">Time Slot</label>
+              <input type="text" id="new-sess-time" placeholder="10:00 AM - 12:30 PM">
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="new-sess-mode">Delivery Mode</label>
+              <select id="new-sess-mode">
+                <option value="Online">Online</option>
+                <option value="Offline">Offline</option>
+                <option value="Hybrid">Hybrid</option>
+              </select>
+            </div>
+            <div class="form-group" style="flex: 3;">
+              <label for="new-sess-link">Meeting Link / Room Venue</label>
+              <input type="text" id="new-sess-link" placeholder="https://meet.google.com/... or Lab 402">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="new-sess-desc">Syllabus Prerequisites & Overview</label>
+            <textarea id="new-sess-desc" rows="2" placeholder="Key topics covered, environment requirements, and exercises..."></textarea>
+          </div>
+
+          <button type="button" class="btn btn-primary" onclick="publishAcademicSession()">➕ Publish Session</button>
+        </div>
+
+        <!-- 3. Session Attendance Verification -->
+        <div class="card table-card" style="margin-bottom: 24px;">
+          <div class="table-header">
+            <h3>3. Session-Wise Attendance Roster Verification</h3>
+            <div class="filters">
+              <label for="admin-session-select" style="font-size: 13px; color: #94a3b8; align-self: center;">Select Session:</label>
+              <select id="admin-session-select" onchange="loadAdminRoster()"></select>
+            </div>
+          </div>
+
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Student ID</th>
+                  <th>Student Name</th>
+                  <th>Attendance Status</th>
+                  <th>Remarks</th>
+                  <th style="text-align: right;">Review Action</th>
+                </tr>
+              </thead>
+              <tbody id="admin-roster-tbody">
+                <tr><td colspan="5" class="text-center">Select a session to view roster...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 4. Session Attendance Analytics Breakdown -->
+        <div class="card table-card">
+          <div class="table-header">
+            <h3>4. 📈 Session Attendance Analytics</h3>
+            <button class="btn btn-secondary btn-sm" onclick="loadAdminAttendanceAnalytics()">Refresh Stats</button>
+          </div>
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Topic</th>
+                  <th>Date</th>
+                  <th>Mode</th>
+                  <th style="color: #10b981;">Present Count</th>
+                  <th style="color: #ef4444;">Absent Count</th>
+                  <th style="color: #f59e0b;">Pending Review</th>
+                </tr>
+              </thead>
+              <tbody id="admin-analytics-tbody">
+                <tr><td colspan="6" class="text-center">Loading analytics breakdown...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======================================================== -->
+      <!-- TAB 3: STUDENT PORTAL (PROFILE, SESSIONS, ATTENDANCE)    -->
+      <!-- ======================================================== -->
+      <section id="student-tab" class="tab-pane hidden">
+        <header class="topbar">
+          <div>
+            <h1>Student Academic Portal</h1>
+            <p class="subtext">Manage your profile, view scheduled lectures, and record your session attendance</p>
+          </div>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <label for="stu-id-input" style="font-size: 12px; color: #94a3b8;">Active Student ID:</label>
+            <input type="number" id="stu-id-input" value="1" style="width: 70px; padding: 6px; border-radius: 6px; text-align: center;">
+            <button class="btn btn-secondary btn-sm" onclick="loadStudentProfile()">Load</button>
+          </div>
+        </header>
+
+        <!-- Profile Management Card -->
+        <div class="card" style="margin-bottom: 24px;">
+          <h3>👤 Profile Management</h3>
+          <p class="subtext" style="margin-bottom: 16px;">Update your academic details (verified email and phone remain protected)</p>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="stu-name">Full Name</label>
+              <input type="text" id="stu-name" placeholder="Full name">
+            </div>
+            <div class="form-group">
+              <label for="stu-dept">Department</label>
+              <input type="text" id="stu-dept" placeholder="Academic department">
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="stu-email">Verified Email (Read-Only)</label>
+              <input type="text" id="stu-email" disabled style="opacity: 0.6; cursor: not-allowed;">
+            </div>
+            <div class="form-group">
+              <label for="stu-approval">Onboarding Approval Status</label>
+              <input type="text" id="stu-approval" disabled style="font-weight: 600; opacity: 0.8; cursor: not-allowed;">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="stu-bio">Bio / Specialization Focus</label>
+            <textarea id="stu-bio" rows="2" placeholder="Research focus or project areas..."></textarea>
+          </div>
+
+          <button type="button" class="btn btn-primary" onclick="saveStudentProfile()">💾 Save Profile</button>
+        </div>
+
+        <!-- Scheduled Sessions & Attendance Submission -->
+        <div class="card" style="margin-bottom: 24px;">
+          <div class="table-header" style="margin-bottom: 12px;">
+            <div>
+              <h3>📅 Browse Sessions & Fill Attendance</h3>
+              <p class="subtext">Select an active session to inspect details and self-submit attendance</p>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="loadStudentSessions()">🔄 Refresh Sessions</button>
+          </div>
+
+          <div class="form-group">
+            <label for="session-select">Select Academic Session</label>
+            <select id="session-select" onchange="displayStudentSessionDetails()"></select>
+          </div>
+
+          <!-- Dynamic Session Overview Card -->
+          <div id="session-details-card" class="card hidden" style="background: #151d30; border: 1px solid #222f49; margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
+              <h4 id="sess-card-topic" style="color: #f8fafc; font-size: 15px; margin: 0;"></h4>
+              <span id="sess-card-mode" class="tag ok"></span>
+            </div>
+            <p id="sess-card-desc" style="color: #94a3b8; font-size: 13px; margin-bottom: 12px;"></p>
+            <div style="font-size: 12px; color: #cbd5e1; border-top: 1px solid #222f49; padding-top: 8px;">
+              <div style="margin-bottom: 4px;">🕒 <strong>Timing:</strong> <span id="sess-card-time"></span></div>
+              <div>🔗 <strong>Venue / Link:</strong> <a id="sess-card-link" href="#" target="_blank" style="color: #38bdf8; text-decoration: underline;"></a></div>
+            </div>
+          </div>
+
+          <button type="button" class="btn btn-success" onclick="submitStudentAttendance()">📝 Fill & Submit Attendance</button>
+        </div>
+
+        <!-- Student Attendance Records -->
+        <div class="card table-card">
+          <div class="table-header">
+            <h3>📊 My Attendance Records</h3>
+          </div>
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Topic</th>
+                  <th>Date</th>
+                  <th>Time</th>
+                  <th>Mode</th>
+                  <th>Status</th>
+                  <th>Instructor Remarks</th>
+                </tr>
+              </thead>
+              <tbody id="student-attendance-tbody">
+                <tr><td colspan="6" class="text-center">Loading attendance history...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======================================================== -->
+      <!-- TAB 4: STUDENT ONBOARDING REGISTRATION & OTP VERIFY      -->
+      <!-- ======================================================== -->
+      <section id="register-tab" class="tab-pane hidden">
         <header class="topbar">
           <div>
             <h1>Student Onboarding & Verification</h1>
@@ -189,7 +445,7 @@
             <button type="submit" id="submitRegBtn" class="btn btn-primary full-width">Register & Send OTPs</button>
           </form>
 
-          <!-- Step 2: Enhanced 2-Step OTP Verification Drawer -->
+          <!-- Step 2: 2-Step OTP Verification Drawer -->
           <div id="otpDrawer" class="otp-box hidden">
             <hr class="divider">
             <div class="otp-header">
@@ -234,7 +490,7 @@
             <!-- Developer / Network Latency Code Inspector -->
             <div class="debug-inspector-box">
               <div class="debug-inspector-content">
-                <span>⚠️ Carrier delay or running in mock mode?</span>
+                <span>⚠️ Carrier delay or running in test mode?</span>
                 <button type="button" class="btn btn-secondary btn-sm" onclick="fetchActiveOtpDebug()">
                   🔍 Inspect Active Test OTPs
                 </button>
