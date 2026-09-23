@@ -17,7 +17,7 @@ const CONFIG = {
     }
 
     // Live Render production backend URL (no trailing /api)
-    return "https://https-gipragyanai-super30-python-project.onrender.com";
+    return "https://pragyanai-super30-python-project-3.onrender.com";
   })()
 };
 
