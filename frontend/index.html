@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EduPortal - Student DB & Verification System</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- Chart.js CDN for Analytics -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <div class="layout">
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="brand">
+        <h2>⚡ EduPortal</h2>
+        <span class="badge">Enterprise</span>
+      </div>
+      <nav class="nav-links">
+        <button class="nav-btn active" id="btn-admin-tab" onclick="switchTab('admin-tab')">📊 Admin Analytics</button>
+        <button class="nav-btn" id="btn-student-tab" onclick="switchTab('student-tab')">🎓 Student Portal</button>
+      </nav>
+      <div class="user-profile">
+        <div class="avatar">AD</div>
+        <div>
+          <p class="user-name">Administrator</p>
+          <span class="user-role">Superadmin</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="content">
+
+      <!-- ======================================================== -->
+      <!-- TAB 1: ADMIN ANALYTICS & STUDENT DIRECTORY -->
+      <!-- ======================================================== -->
+      <section id="admin-tab" class="tab-pane active">
+        <header class="topbar">
+          <div>
+            <h1>Analytics & Student Administration</h1>
+            <p class="subtext">Real-time verification metrics and enrolled database records</p>
+          </div>
+          <button class="btn btn-primary" onclick="loadAllAdminData()">🔄 Refresh</button>
+        </header>
+
+        <!-- KPI Metric Cards -->
+        <div class="kpi-grid">
+          <div class="card kpi-card">
+            <h3>Total Enrolled</h3>
+            <p class="kpi-val" id="kpi-total">0</p>
+            <span class="subtext">Active student records</span>
+          </div>
+          <div class="card kpi-card">
+            <h3>Fully Verified</h3>
+            <p class="kpi-val text-green" id="kpi-verified">0</p>
+            <span class="subtext">Both SMS & Email OK</span>
+          </div>
+          <div class="card kpi-card">
+            <h3>Pending OTP</h3>
+            <p class="kpi-val text-orange" id="kpi-pending">0</p>
+            <span class="subtext">Awaiting verification</span>
+          </div>
+          <div class="card kpi-card">
+            <h3>Success Ratio</h3>
+            <p class="kpi-val text-blue" id="kpi-rate">0%</p>
+            <span class="subtext">Verification rate</span>
+          </div>
+        </div>
+
+        <!-- Charts Grid -->
+        <div class="charts-grid">
+          <div class="card chart-box">
+            <h3>Enrollments by Department</h3>
+            <div class="chart-wrapper">
+              <canvas id="deptChart"></canvas>
+            </div>
+          </div>
+          <div class="card chart-box">
+            <h3>Verification Health</h3>
+            <div class="chart-wrapper">
+              <canvas id="verifyChart"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Student Database Table -->
+        <div class="card table-card">
+          <div class="table-header">
+            <h3>Student Directory</h3>
+            <div class="filters">
+              <input type="text" id="searchBox" placeholder="Search name, email, or phone..." oninput="debounceSearch()">
+              <select id="deptFilter" onchange="resetAndFetchTable()">
+                <option value="">All Departments</option>
+                <option value="Computer Science">Computer Science</option>
+                <option value="Artificial Intelligence">Artificial Intelligence</option>
+                <option value="Data Science">Data Science</option>
+                <option value="Information Tech">Information Tech</option>
+                <option value="Electronics">Electronics</option>
+              </select>
+              <select id="statusFilter" onchange="resetAndFetchTable()">
+                <option value="">All Statuses</option>
+                <option value="verified">Fully Verified</option>
+                <option value="pending">Pending</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Student Name</th>
+                  <th>Email Address</th>
+                  <th>Phone Number</th>
+                  <th>Branch</th>
+                  <th>Sem</th>
+                  <th>SMS OTP</th>
+                  <th>Email OTP</th>
+                </tr>
+              </thead>
+              <tbody id="studentTableBody">
+                <tr><td colspan="8" class="text-center">Loading student records...</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Pagination Bar -->
+          <div class="pagination">
+            <span id="pageInfo">Showing Page 1 of 1</span>
+            <div class="pagination-buttons">
+              <button class="btn btn-secondary" id="prevBtn" onclick="changePage(-1)" disabled>Previous</button>
+              <button class="btn btn-secondary" id="nextBtn" onclick="changePage(1)" disabled>Next</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======================================================== -->
+      <!-- TAB 2: STUDENT PORTAL (REGISTRATION & OTP VERIFICATION) -->
+      <!-- ======================================================== -->
+      <section id="student-tab" class="tab-pane">
+        <header class="topbar">
+          <div>
+            <h1>Student Onboarding & Verification</h1>
+            <p class="subtext">Register your account to receive Phone & Email verification codes</p>
+          </div>
+        </header>
+
+        <div class="student-form-container card">
+          <!-- Step 1: Registration Form -->
+          <form id="studentRegistrationForm" onsubmit="handleRegistration(event)">
+            <h3>New Student Registration</h3>
+            
+            <div class="form-group">
+              <label for="stuName">Full Name</label>
+              <input type="text" id="stuName" required placeholder="e.g. Aarav Sharma">
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="stuEmail">Email Address</label>
+                <input type="email" id="stuEmail" required placeholder="name@college.edu">
+              </div>
+              <div class="form-group">
+                <label for="stuPhone">Phone Number (with Country Code)</label>
+                <input type="tel" id="stuPhone" required placeholder="+919876543210">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="stuDept">Department</label>
+                <select id="stuDept" required>
+                  <option value="Computer Science">Computer Science</option>
+                  <option value="Artificial Intelligence">Artificial Intelligence</option>
+                  <option value="Data Science">Data Science</option>
+                  <option value="Information Tech">Information Tech</option>
+                  <option value="Electronics">Electronics</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="stuSem">Semester</label>
+                <input type="number" id="stuSem" min="1" max="8" value="1" required>
+              </div>
+            </div>
+
+            <button type="submit" id="submitRegBtn" class="btn btn-primary full-width">Register & Send OTPs</button>
+          </form>
+
+          <!-- Step 2: Enhanced 2-Step OTP Verification Drawer -->
+          <div id="otpDrawer" class="otp-box hidden">
+            <hr class="divider">
+            <div class="otp-header">
+              <h3>Verify Contact Details</h3>
+              <p class="subtext">Enter the 6-digit codes sent to your registered contact channels.</p>
+            </div>
+
+            <div class="otp-input-row">
+              <!-- SMS Verification Card -->
+              <div class="otp-card">
+                <div class="otp-channel-header">
+                  <label for="phoneOtpInput">📱 SMS Verification</label>
+                  <button type="button" id="btnResendPhone" class="btn-resend" onclick="handleResendOTP('phone')">
+                    Resend SMS
+                  </button>
+                </div>
+                <div class="channel-target-info" id="displayPhoneLabel">+91...</div>
+                <div class="input-inline">
+                  <input type="text" id="phoneOtpInput" maxlength="6" placeholder="6-digit code">
+                  <button type="button" class="btn btn-success" id="btnVerifyPhone" onclick="verifyOTP('phone')">Verify</button>
+                </div>
+                <span id="phoneVerifyBadge" class="verify-status"></span>
+              </div>
+
+              <!-- Email Verification Card -->
+              <div class="otp-card">
+                <div class="otp-channel-header">
+                  <label for="emailOtpInput">📧 Email Verification</label>
+                  <button type="button" id="btnResendEmail" class="btn-resend" onclick="handleResendOTP('email')">
+                    Resend Email
+                  </button>
+                </div>
+                <div class="channel-target-info" id="displayEmailLabel">user@...</div>
+                <div class="input-inline">
+                  <input type="text" id="emailOtpInput" maxlength="6" placeholder="6-digit code">
+                  <button type="button" class="btn btn-success" id="btnVerifyEmail" onclick="verifyOTP('email')">Verify</button>
+                </div>
+                <span id="emailVerifyBadge" class="verify-status"></span>
+              </div>
+            </div>
+
+            <!-- Developer / Network Latency Code Inspector -->
+            <div class="debug-inspector-box">
+              <div class="debug-inspector-content">
+                <span>⚠️ Carrier delay or running in mock mode?</span>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="fetchActiveOtpDebug()">
+                  🔍 Inspect Active Test OTPs
+                </button>
+              </div>
+              <div id="debugCodesContainer" class="hidden"></div>
+            </div>
+          </div>
+
+          <div id="notifyMessage" class="notify hidden"></div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Runtime Config followed by App Logic -->
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
