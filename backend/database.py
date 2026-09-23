@@ -2,7 +2,7 @@
 
 Provides dual-engine compatibility for SQLite (local development) and
 PostgreSQL (Render managed database), including pooled connections, dynamic schema
-initialization, safe sequential column migrations, and cross-engine boolean compatibility.
+initialization, safe sequential column migrations, and legacy column constraint relaxation.
 """
 
 import os
@@ -53,7 +53,6 @@ class UnifiedCursor:
             if "?" in sql and "%s" not in sql:
                 sql = sql.replace("?", "%s")
 
-            # If query is an INSERT and doesn't specify RETURNING, append RETURNING id for lastrowid compatibility
             stripped = sql.strip().rstrip(";").strip()
             if stripped.upper().startswith("INSERT INTO") and "RETURNING" not in stripped.upper():
                 sql = f"{stripped} RETURNING id;"
@@ -186,6 +185,35 @@ def _ensure_column_exists(cursor: UnifiedCursor, table: str, column: str, col_ty
         print(f"[!] Migration notice on {table}.{column}: {e}")
 
 
+def _relax_legacy_not_null_constraints(cursor: UnifiedCursor):
+    """Relaxes NOT NULL constraints on legacy columns (e.g. college_name, usn, branch)
+
+    in existing PostgreSQL instances so new modular inserts do not fail.
+    """
+    if not IS_POSTGRES:
+        return
+
+    # List of known active non-null columns that must stay NOT NULL
+    protected_columns = {"id", "email", "phone"}
+
+    try:
+        cursor.execute("""
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'students' 
+              AND is_nullable = 'NO'
+              AND column_default IS NULL;
+        """)
+        not_null_rows = cursor.fetchall()
+        for row in not_null_rows:
+            col = row.get("column_name")
+            if col and col not in protected_columns:
+                print(f"[*] Relaxing legacy NOT NULL constraint on column: students.{col}")
+                cursor.execute(f"ALTER TABLE students ALTER COLUMN {col} DROP NOT NULL;")
+    except Exception as err:
+        print(f"[!] Warning during constraint relaxation: {err}")
+
+
 def init_db() -> None:
     """Initializes tables, applies safe column migrations, creates indexes, and populates seed data."""
     with get_db() as conn:
@@ -305,7 +333,7 @@ def init_db() -> None:
             cursor.execute(stmt.strip())
 
         # ---------------------------------------------------------
-        # PHASE 2: Dynamic Column Migrations
+        # PHASE 2: Dynamic Column Migrations & Legacy Constraint Fixes
         # ---------------------------------------------------------
         _ensure_column_exists(cursor, "students", "full_name", "VARCHAR(150) DEFAULT ''")
         _ensure_column_exists(cursor, "students", "name", "VARCHAR(150) DEFAULT ''")
@@ -317,7 +345,10 @@ def init_db() -> None:
         _ensure_column_exists(cursor, "students", "email_verified", bool_type)
         _ensure_column_exists(cursor, "students", "approval_status", "VARCHAR(50) DEFAULT 'PENDING'")
 
-        # Sync legacy 'name' column to 'full_name' if needed
+        # Drop NOT NULL constraints from old unused columns (e.g. college_name)
+        _relax_legacy_not_null_constraints(cursor)
+
+        # Sync legacy 'name' column to 'full_name' if present
         try:
             cursor.execute("""
                 UPDATE students 
