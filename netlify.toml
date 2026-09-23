@@ -1,12 +1,25 @@
-# Netlify Configuration for Frontend Deployment
+# ==========================================
+# Netlify Build & Directory Configuration
+# ==========================================
 [build]
+  # The directory that contains your HTML, CSS, and JS files
   publish = "frontend"
 
+  # No build step is required since this uses static HTML/JS
+  command = ""
+
+# ==========================================
+# Client-Side Redirects / Routing
+# ==========================================
+# Serves index.html for any direct routes or refreshes
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
 
+# ==========================================
+# HTTP Security & Cache Headers
+# ==========================================
 [[headers]]
   for = "/*"
   [headers.values]
@@ -14,3 +27,14 @@
     X-XSS-Protection = "1; mode=block"
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
+
+# Prevent aggressive caching of JavaScript configs so API endpoint updates reflect immediately
+[[headers]]
+  for = "/config.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/app.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
