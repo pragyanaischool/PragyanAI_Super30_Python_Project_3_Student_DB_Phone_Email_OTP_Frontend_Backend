@@ -2,6 +2,7 @@
 
 Defines request/response schemas for Student Profile management,
 Session publishing, Attendance logging, and Admin Approval workflows.
+Fully compatible with Pydantic v2 and Python 3.11 through 3.14+.
 """
 
 from datetime import datetime
@@ -44,20 +45,20 @@ class StudentProfileUpdate(BaseModel):
         min_length=2,
         max_length=120,
         description="Full name of the student",
-        example="Sateesh Ambesange",
+        examples=["Sateesh Ambesange"],
     )
     department: str = Field(
         ...,
         min_length=2,
         max_length=100,
         description="Academic department or stream",
-        example="Computer Science & Engineering",
+        examples=["Computer Science & Engineering"],
     )
     bio: Optional[str] = Field(
         default="",
         max_length=500,
         description="Short student background or research interests",
-        example="Focusing on Edge AI and Distributed Systems.",
+        examples=["Focusing on Edge AI and Distributed Systems."],
     )
 
 
@@ -67,13 +68,13 @@ class AttendanceSubmit(BaseModel):
         ...,
         gt=0,
         description="ID of the student claiming attendance",
-        example=1,
+        examples=[1],
     )
     session_id: int = Field(
         ...,
         gt=0,
         description="Target academic session ID",
-        example=1,
+        examples=[1],
     )
 
 
@@ -97,7 +98,7 @@ class StudentApprovalAction(BaseModel):
     status: ApprovalStatusEnum = Field(
         ...,
         description="Decision status: APPROVED, REJECTED, or PENDING",
-        example=ApprovalStatusEnum.APPROVED,
+        examples=[ApprovalStatusEnum.APPROVED],
     )
 
 
@@ -108,38 +109,38 @@ class SessionCreate(BaseModel):
         min_length=3,
         max_length=200,
         description="Session title or lecture subject",
-        example="Introduction to Agentic AI & LangGraph",
+        examples=["Introduction to Agentic AI & LangGraph"],
     )
     session_date: str = Field(
         ...,
-        regex=r"^\d{4}-\d{2}-\d{2}$",
+        pattern=r"^\d{4}-\d{2}-\d{2}$",
         description="Scheduled date in YYYY-MM-DD format",
-        example="2026-10-01",
+        examples=["2026-10-01"],
     )
     timing: str = Field(
         ...,
         min_length=3,
         max_length=60,
         description="Time slot of the session",
-        example="10:00 AM - 12:00 PM",
+        examples=["10:00 AM - 12:00 PM"],
     )
     mode: SessionModeEnum = Field(
         default=SessionModeEnum.ONLINE,
         description="Delivery mode: Online, Offline, or Hybrid",
-        example=SessionModeEnum.ONLINE,
+        examples=[SessionModeEnum.ONLINE],
     )
     meeting_link: str = Field(
         ...,
         min_length=3,
         max_length=255,
         description="Google Meet / Zoom link or classroom physical room location",
-        example="https://meet.google.com/abc-prag-xyz",
+        examples=["https://meet.google.com/abc-prag-xyz"],
     )
     description: Optional[str] = Field(
         default="",
         max_length=1000,
         description="Syllabus outline or prerequisites",
-        example="Deep dive into multi-agent loops, state machines, and tool execution.",
+        examples=["Deep dive into multi-agent loops, state machines, and tool execution."],
     )
 
 
@@ -148,13 +149,13 @@ class AttendanceReview(BaseModel):
     status: AttendanceStatusEnum = Field(
         ...,
         description="Verification mark: PRESENT or ABSENT",
-        example=AttendanceStatusEnum.PRESENT,
+        examples=[AttendanceStatusEnum.PRESENT],
     )
     remarks: Optional[str] = Field(
         default="",
         max_length=255,
         description="Instructor remarks or notes",
-        example="Active participant during Q&A and submitted code exercises.",
+        examples=["Active participant during Q&A and submitted code exercises."],
     )
 
 
