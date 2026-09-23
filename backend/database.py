@@ -3,14 +3,19 @@
 Provides dual-engine compatibility for SQLite (local development) and
 PostgreSQL (Render managed database), including pooled connections, dynamic schema
 initialization, safe sequential column migrations, legacy column relaxation,
-and dynamic foreign key seed resolution.
+password hashing support, and dynamic foreign key seed resolution.
 """
 
 import os
 import sqlite3
+import hashlib
 from contextlib import contextmanager
 from typing import Generator, Any, Dict, List, Optional
-from config import settings
+
+try:
+    from backend.config import settings
+except ImportError:
+    from config import settings
 
 # Determine database engine from DATABASE_URL
 DB_URL = settings.DATABASE_URL
@@ -36,6 +41,11 @@ if IS_POSTGRES:
         )
     except Exception as e:
         print(f"[!] Warning: Could not initialize PostgreSQL pool immediately: {e}")
+
+
+def _hash_default_password(password: str) -> str:
+    """Utility helper for consistent seed credential hashing."""
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
 class UnifiedCursor:
@@ -243,6 +253,7 @@ def init_db() -> None:
                     department VARCHAR(100),
                     semester INT DEFAULT 1,
                     bio TEXT DEFAULT '',
+                    password_hash VARCHAR(255) DEFAULT '',
                     phone_verified BOOLEAN DEFAULT FALSE,
                     email_verified BOOLEAN DEFAULT FALSE,
                     approval_status VARCHAR(50) DEFAULT 'PENDING',
@@ -295,6 +306,7 @@ def init_db() -> None:
                     department TEXT,
                     semester INTEGER DEFAULT 1,
                     bio TEXT DEFAULT '',
+                    password_hash TEXT DEFAULT '',
                     phone_verified BOOLEAN DEFAULT 0,
                     email_verified BOOLEAN DEFAULT 0,
                     approval_status TEXT DEFAULT 'PENDING',
@@ -339,6 +351,7 @@ def init_db() -> None:
         _ensure_column_exists(cursor, "students", "department", "VARCHAR(100) DEFAULT 'General'")
         _ensure_column_exists(cursor, "students", "semester", "INT DEFAULT 1")
         _ensure_column_exists(cursor, "students", "bio", "TEXT DEFAULT ''")
+        _ensure_column_exists(cursor, "students", "password_hash", "VARCHAR(255) DEFAULT ''")
         bool_type = "BOOLEAN DEFAULT FALSE" if IS_POSTGRES else "BOOLEAN DEFAULT 0"
         _ensure_column_exists(cursor, "students", "phone_verified", bool_type)
         _ensure_column_exists(cursor, "students", "email_verified", bool_type)
@@ -357,6 +370,17 @@ def init_db() -> None:
         except Exception:
             pass
 
+        # Populate default password hash for any existing student rows missing one
+        default_student_hash = _hash_default_password("student123")
+        try:
+            cursor.execute("""
+                UPDATE students 
+                SET password_hash = ? 
+                WHERE password_hash IS NULL OR password_hash = '';
+            """, (default_student_hash,))
+        except Exception:
+            pass
+
         # ---------------------------------------------------------
         # PHASE 3: Create Indexes
         # ---------------------------------------------------------
@@ -372,13 +396,28 @@ def init_db() -> None:
             cursor.execute(idx.strip())
 
         # ---------------------------------------------------------
-        # PHASE 4: Automated Seed Data (Dynamic Foreign Key Resolution)
+        # PHASE 4: Default Admin Seeding
+        # ---------------------------------------------------------
+        cursor.execute("SELECT COUNT(*) AS count FROM admins;")
+        admin_count_row = cursor.fetchone()
+        admin_count = admin_count_row.get("count", 0) if admin_count_row else 0
+
+        if admin_count == 0:
+            default_admin_hash = _hash_default_password("admin123")
+            cursor.execute("""
+                INSERT INTO admins (username, email, password_hash, role)
+                VALUES (?, ?, ?, 'superadmin');
+            """, ("admin", "admin@pragyanai.com", default_admin_hash))
+
+        # ---------------------------------------------------------
+        # PHASE 5: Automated Seed Data (Dynamic Foreign Key Resolution)
         # ---------------------------------------------------------
         cursor.execute("SELECT COUNT(*) as count FROM students;")
         st_count_row = cursor.fetchone()
         st_count = st_count_row.get("count", 0) if st_count_row else 0
 
         if st_count == 0:
+            std_pw = default_student_hash
             sample_students = [
                 (
                     "Sateesh Ambesange",
@@ -388,6 +427,7 @@ def init_db() -> None:
                     "Computer Science",
                     8,
                     "AI Systems Architect & Founder focusing on Agentic AI, EDA, and Kernel Drivers.",
+                    std_pw,
                     True,
                     True,
                     "APPROVED"
@@ -400,6 +440,7 @@ def init_db() -> None:
                     "Artificial Intelligence",
                     6,
                     "Specializing in small language models, quantization, and ONNX Runtime execution.",
+                    std_pw,
                     True,
                     True,
                     "APPROVED"
@@ -412,6 +453,7 @@ def init_db() -> None:
                     "Electronics",
                     6,
                     "Embedded Linux engineer researching real-time kernel optimizations and Yocto.",
+                    std_pw,
                     True,
                     False,
                     "PENDING"
@@ -424,6 +466,7 @@ def init_db() -> None:
                     "Information Tech",
                     4,
                     "Student focusing on distributed databases, vector indexes, and microservices.",
+                    std_pw,
                     False,
                     False,
                     "REJECTED"
@@ -432,8 +475,8 @@ def init_db() -> None:
             cursor.executemany("""
                 INSERT INTO students (
                     full_name, name, email, phone, department, semester, bio,
-                    phone_verified, email_verified, approval_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    password_hash, phone_verified, email_verified, approval_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """, sample_students)
 
         # Check sessions table
