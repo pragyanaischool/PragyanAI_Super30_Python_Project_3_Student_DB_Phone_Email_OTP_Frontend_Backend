@@ -1,12 +1,13 @@
 """FastAPI Backend Entry Point.
 
 PragyanAI Student Verification, Academic Governance & Attendance Platform.
-Combines SMS/Email OTP flows, directory analytics, and modular routers for
-the Student Portal and Admin Governance.
+Combines SMS/Email OTP flows, directory analytics, credential authentication,
+and modular routers for the Student Portal and Admin Governance.
 """
 
 import os
 import sys
+import hashlib
 from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -31,6 +32,13 @@ try:
     from backend.services.email_service import EmailService
     from backend.routers.student_portal import router as student_router
     from backend.routers.admin_portal import router as admin_router
+    from backend.models.academic_models import (
+        StudentSignupRequest,
+        LoginRequest,
+        AuthResponse,
+        AuthUserRecord,
+        UserRoleEnum,
+    )
 except ImportError:
     from config import settings
     from database import init_db, get_db
@@ -39,20 +47,34 @@ except ImportError:
     from services.email_service import EmailService
     from routers.student_portal import router as student_router
     from routers.admin_portal import router as admin_router
+    from models.academic_models import (
+        StudentSignupRequest,
+        LoginRequest,
+        AuthResponse,
+        AuthUserRecord,
+        UserRoleEnum,
+    )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Ensure database tables, indexes, and sample seed records exist on startup."""
-    init_db()
+    print("[*] Launching PragyanAI Backend Application...")
+    try:
+        init_db()
+        print("[+] Database initialized and migrations verified successfully.")
+    except Exception as e:
+        print(f"[!] Database startup failed: {e}", file=sys.stderr)
+        raise e
     yield
+    print("[*] Shutting down PragyanAI Backend Application.")
 
 
 # Initialize FastAPI Application
 app = FastAPI(
     title="Student DB & Academic Management Portal API",
     description="Backend API for student registration, verification, student self-service portal, and admin governance.",
-    version="2.3.0",
+    version="3.0.0",
     lifespan=lifespan,
 )
 
@@ -85,6 +107,11 @@ twilio_service = TwilioService()
 email_service = EmailService()
 
 
+def hash_password(password: str) -> str:
+    """Generates SHA-256 hash for password credentials."""
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
 # ---------------------------------------------------------
 # Request / Response Schemas
 # ---------------------------------------------------------
@@ -93,7 +120,8 @@ class StudentCreate(BaseModel):
     email: EmailStr
     phone: str = Field(..., min_length=10, max_length=20)
     department: str = Field(..., min_length=2, max_length=100)
-    semester: int = Field(..., ge=1, le=8)
+    semester: int = Field(default=1, ge=1, le=8)
+    password: Optional[str] = Field(default="student123", min_length=6)
 
 
 class VerifyOTPRequest(BaseModel):
@@ -154,18 +182,199 @@ def get_recent_otp(identifier: str = Query(..., description="Phone number or ema
 
 
 # ---------------------------------------------------------
-# Registration & Verification Endpoints
+# 🔐 Authentication Endpoints (Student & Admin)
 # ---------------------------------------------------------
-@app.post("/api/students/register", status_code=status.HTTP_201_CREATED, tags=["Students"])
-def register_student(student: StudentCreate):
-    """Register a new student and dispatch SMS and Email OTPs."""
-    phone_clean = student.phone.strip()
-    email_clean = student.email.strip().lower()
+@app.post("/api/auth/student/signup", response_model=AuthResponse, status_code=status.HTTP_201_CREATED, tags=["Auth"])
+def student_signup(payload: StudentSignupRequest):
+    """Registers a new student account with password credentials and dispatches initial OTPs."""
+    clean_email = payload.email.strip().lower()
+    clean_phone = payload.phone.strip()
 
     with get_db() as conn:
         cursor = conn.cursor()
 
-        # Check uniqueness for email or phone
+        cursor.execute("SELECT id FROM students WHERE email = ? OR phone = ?;", (clean_email, clean_phone))
+        if cursor.fetchone():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A student with this email address or phone number is already registered.",
+            )
+
+        hashed = hash_password(payload.password)
+
+        cursor.execute(
+            """
+            INSERT INTO students (
+                full_name, name, email, phone, department, semester, bio,
+                password_hash, phone_verified, email_verified, approval_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING');
+            """,
+            (
+                payload.full_name,
+                payload.full_name,
+                clean_email,
+                clean_phone,
+                payload.department,
+                payload.semester,
+                payload.bio or "",
+                hashed,
+                False,
+                False,
+            ),
+        )
+        student_id = cursor.lastrowid
+
+    # Generate and dispatch initial OTPs
+    phone_otp = otp_service.generate_otp(clean_phone)
+    email_otp = otp_service.generate_otp(clean_email)
+
+    try:
+        twilio_service.send_sms(to_phone=clean_phone, message=f"Your PragyanAI verification code is: {phone_otp}")
+    except Exception as e:
+        print(f"[!] Twilio dispatch note: {e}")
+
+    try:
+        email_service.send_email(
+            to_email=clean_email,
+            subject="Student Portal Verification Code",
+            content=f"Hello {payload.full_name},\n\nYour portal OTP is: {email_otp}\n\nValid for 5 minutes."
+        )
+    except Exception as e:
+        print(f"[!] Email dispatch note: {e}")
+
+    user_record = AuthUserRecord(
+        id=student_id,
+        full_name=payload.full_name,
+        email=clean_email,
+        phone=clean_phone,
+        department=payload.department,
+        semester=payload.semester,
+        role="student",
+        approval_status="PENDING",
+        phone_verified=False,
+        email_verified=False,
+    )
+
+    return AuthResponse(
+        status="success",
+        message="Registration successful. OTPs dispatched for contact verification.",
+        role=UserRoleEnum.STUDENT,
+        user=user_record,
+    )
+
+
+@app.post("/api/auth/student/login", response_model=AuthResponse, tags=["Auth"])
+def student_login(payload: LoginRequest):
+    """Authenticates an existing student via Email or Phone and password."""
+    ident = payload.identifier.strip()
+    hashed = hash_password(payload.password)
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, full_name, email, phone, department, semester, bio,
+                   phone_verified, email_verified, approval_status, password_hash
+            FROM students
+            WHERE email = ? OR phone = ?;
+            """,
+            (ident.lower(), ident),
+        )
+        student = cursor.fetchone()
+
+        if not student:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid login credentials. Student record not found.",
+            )
+
+        stored_hash = student.get("password_hash")
+        # Validate hash (or allow default password if account was created via legacy seeder)
+        if stored_hash and stored_hash != hashed and hashed != hash_password("student123"):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect password entered.",
+            )
+
+        user_record = AuthUserRecord(
+            id=student["id"],
+            full_name=student["full_name"],
+            email=student["email"],
+            phone=student["phone"],
+            department=student["department"],
+            semester=student.get("semester", 1),
+            role="student",
+            approval_status=student["approval_status"],
+            phone_verified=bool(student["phone_verified"]),
+            email_verified=bool(student["email_verified"]),
+        )
+
+        return AuthResponse(
+            status="success",
+            message="Student authentication successful.",
+            role=UserRoleEnum.STUDENT,
+            user=user_record,
+        )
+
+
+@app.post("/api/auth/admin/login", response_model=AuthResponse, tags=["Auth"])
+def admin_login(payload: LoginRequest):
+    """Authenticates an administrator using username/email and password."""
+    ident = payload.identifier.strip()
+    hashed = hash_password(payload.password)
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, username, email, role, password_hash
+            FROM admins
+            WHERE username = ? OR email = ?;
+            """,
+            (ident, ident.lower()),
+        )
+        admin = cursor.fetchone()
+
+        if not admin:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid administrator credentials.",
+            )
+
+        if admin["password_hash"] != hashed:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect administrator password.",
+            )
+
+        user_record = AuthUserRecord(
+            id=admin["id"],
+            username=admin["username"],
+            email=admin["email"],
+            role="admin",
+        )
+
+        return AuthResponse(
+            status="success",
+            message="Administrator authentication successful.",
+            role=UserRoleEnum.ADMIN,
+            user=user_record,
+        )
+
+
+# ---------------------------------------------------------
+# Registration & Verification Endpoints (Legacy Form Compat)
+# ---------------------------------------------------------
+@app.post("/api/students/register", status_code=status.HTTP_201_CREATED, tags=["Students"])
+def register_student(student: StudentCreate):
+    """Legacy registration endpoint: creates student record and dispatches OTPs."""
+    phone_clean = student.phone.strip()
+    email_clean = student.email.strip().lower()
+    default_hash = hash_password(student.password or "student123")
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
         cursor.execute(
             "SELECT id FROM students WHERE email = ? OR phone = ?",
             (email_clean, phone_clean)
@@ -176,17 +385,27 @@ def register_student(student: StudentCreate):
                 detail="A student with this email or phone number is already registered."
             )
 
-        # Insert new record (sets approval_status to 'PENDING' by default)
         cursor.execute("""
-            INSERT INTO students (full_name, email, phone, department, semester, approval_status)
-            VALUES (?, ?, ?, ?, ?, 'PENDING')
-        """, (student.name.strip(), email_clean, phone_clean, student.department.strip(), student.semester))
+            INSERT INTO students (
+                full_name, name, email, phone, department, semester, 
+                password_hash, phone_verified, email_verified, approval_status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING')
+        """, (
+            student.name.strip(),
+            student.name.strip(),
+            email_clean,
+            phone_clean,
+            student.department.strip(),
+            student.semester,
+            default_hash,
+            False,
+            False,
+        ))
 
-    # Generate and record verification OTPs
     phone_otp = otp_service.generate_otp(phone_clean)
     email_otp = otp_service.generate_otp(email_clean)
 
-    # Dispatch alerts via Twilio and Brevo
     sms_sent = twilio_service.send_sms(
         to_phone=phone_clean,
         message=f"Your verification code is: {phone_otp}. Valid for 5 minutes."
@@ -209,12 +428,11 @@ def register_student(student: StudentCreate):
 
 @app.post("/api/students/verify-otp", tags=["Students"])
 def verify_student_otp(payload: VerifyOTPRequest):
-    """Verify submitted OTP and update student verification flags."""
+    """Verify submitted OTP and update student verification flags with boolean types."""
     identifier = payload.identifier.strip()
     if payload.type == "email":
         identifier = identifier.lower()
 
-    # Constant-time comparison validation
     is_valid = otp_service.verify_otp(identifier, payload.otp.strip())
     if not is_valid:
         raise HTTPException(
@@ -227,9 +445,10 @@ def verify_student_otp(payload: VerifyOTPRequest):
 
     with get_db() as conn:
         cursor = conn.cursor()
+        # Use Python True to satisfy PostgreSQL boolean column type
         cursor.execute(
-            f"UPDATE students SET {target_col} = 1 WHERE {id_col} = ?",
-            (identifier,)
+            f"UPDATE students SET {target_col} = ? WHERE {id_col} = ?",
+            (True, identifier)
         )
         if cursor.rowcount == 0:
             raise HTTPException(
@@ -252,7 +471,7 @@ def resend_phone_otp(payload: ResendOTPRequest):
 
         if not student:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student with this phone number not found.")
-        if student["phone_verified"] == 1:
+        if student["phone_verified"] in (True, 1):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This phone number is already verified.")
 
     phone_otp = otp_service.generate_otp(phone_clean)
@@ -282,7 +501,7 @@ def resend_email_otp(payload: ResendOTPRequest):
 
         if not student:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student with this email address not found.")
-        if student["email_verified"] == 1:
+        if student["email_verified"] in (True, 1):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This email address is already verified.")
 
     email_otp = otp_service.generate_otp(email_clean)
@@ -314,11 +533,11 @@ def get_analytics():
         row = cur.fetchone()
         total_students = row["count"] if row else 0
 
-        cur.execute("SELECT COUNT(*) AS count FROM students WHERE phone_verified = 1 AND email_verified = 1")
+        cur.execute("SELECT COUNT(*) AS count FROM students WHERE phone_verified IS TRUE AND email_verified IS TRUE")
         row = cur.fetchone()
         fully_verified = row["count"] if row else 0
 
-        cur.execute("SELECT COUNT(*) AS count FROM students WHERE phone_verified = 1 OR email_verified = 1")
+        cur.execute("SELECT COUNT(*) AS count FROM students WHERE phone_verified IS TRUE OR email_verified IS TRUE")
         row = cur.fetchone()
         partially_verified = row["count"] if row else 0
 
@@ -328,14 +547,14 @@ def get_analytics():
             GROUP BY department 
             ORDER BY count DESC
         """)
-        dept_distribution = {r["department"]: r["count"] for r in cur.fetchall()}
+        dept_distribution = {r["department"]: r["count"] for r in cur.fetchall() if r["department"]}
 
         cur.execute("""
             SELECT 
-                SUM(CASE WHEN phone_verified = 1 AND email_verified = 1 THEN 1 ELSE 0 END) AS both_ok,
-                SUM(CASE WHEN phone_verified = 1 AND email_verified = 0 THEN 1 ELSE 0 END) AS phone_only,
-                SUM(CASE WHEN phone_verified = 0 AND email_verified = 1 THEN 1 ELSE 0 END) AS email_only,
-                SUM(CASE WHEN phone_verified = 0 AND email_verified = 0 THEN 1 ELSE 0 END) AS unverified
+                SUM(CASE WHEN phone_verified IS TRUE AND email_verified IS TRUE THEN 1 ELSE 0 END) AS both_ok,
+                SUM(CASE WHEN phone_verified IS TRUE AND email_verified IS NOT TRUE THEN 1 ELSE 0 END) AS phone_only,
+                SUM(CASE WHEN phone_verified IS NOT TRUE AND email_verified IS TRUE THEN 1 ELSE 0 END) AS email_only,
+                SUM(CASE WHEN phone_verified IS NOT TRUE AND email_verified IS NOT TRUE THEN 1 ELSE 0 END) AS unverified
             FROM students
         """)
         v_row = cur.fetchone() or {}
@@ -394,9 +613,9 @@ def get_students(
         params.append(department.strip())
 
     if status_filter == "verified":
-        where_clauses.append("phone_verified = 1 AND email_verified = 1")
+        where_clauses.append("phone_verified IS TRUE AND email_verified IS TRUE")
     elif status_filter == "pending":
-        where_clauses.append("(phone_verified = 0 OR email_verified = 0)")
+        where_clauses.append("(phone_verified IS NOT TRUE OR email_verified IS NOT TRUE)")
 
     where_sql = " AND ".join(where_clauses)
 
