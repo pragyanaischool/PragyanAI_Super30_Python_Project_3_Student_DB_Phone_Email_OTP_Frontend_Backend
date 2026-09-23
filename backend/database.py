@@ -1,8 +1,8 @@
-"""Database Connection and Lifecycle Manager.
+"""Database Connection, Migration, and Lifecycle Manager.
 
 Provides dual-engine compatibility for SQLite (local development) and
 PostgreSQL (Render managed database), including pooled connections, dynamic schema
-initialization, safe column migrations, and automatic seed data generation.
+initialization, safe sequential column migrations, and automatic seed data generation.
 """
 
 import os
@@ -187,15 +187,15 @@ def _ensure_column_exists(cursor: UnifiedCursor, table: str, column: str, col_ty
 
 
 def init_db() -> None:
-    """Initializes tables, creates indexes, applies safe column migrations, and populates seed data."""
+    """Initializes tables, applies safe column migrations, creates indexes, and populates seed data."""
     with get_db() as conn:
         cursor = conn.cursor()
 
         # ---------------------------------------------------------
-        # 1. Base Schemas (PostgreSQL & SQLite)
+        # PHASE 1: Base Table Creation (Indexes omitted intentionally)
         # ---------------------------------------------------------
         if IS_POSTGRES:
-            statements = [
+            table_statements = [
                 """
                 CREATE TABLE IF NOT EXISTS admins (
                     id SERIAL PRIMARY KEY,
@@ -213,11 +213,11 @@ def init_db() -> None:
                     name VARCHAR(150),
                     email VARCHAR(255) UNIQUE NOT NULL,
                     phone VARCHAR(50) UNIQUE NOT NULL,
-                    department VARCHAR(100) NOT NULL,
-                    semester INT DEFAULT 1 CHECK (semester BETWEEN 1 AND 8),
+                    department VARCHAR(100),
+                    semester INT DEFAULT 1,
                     bio TEXT DEFAULT '',
-                    phone_verified SMALLINT DEFAULT 0 CHECK (phone_verified IN (0, 1)),
-                    email_verified SMALLINT DEFAULT 0 CHECK (email_verified IN (0, 1)),
+                    phone_verified SMALLINT DEFAULT 0,
+                    email_verified SMALLINT DEFAULT 0,
                     approval_status VARCHAR(50) DEFAULT 'PENDING',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
@@ -244,16 +244,10 @@ def init_db() -> None:
                     submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     CONSTRAINT unique_session_student UNIQUE (session_id, student_id)
                 );
-                """,
-                "CREATE INDEX IF NOT EXISTS idx_students_email ON students(email);",
-                "CREATE INDEX IF NOT EXISTS idx_students_phone ON students(phone);",
-                "CREATE INDEX IF NOT EXISTS idx_students_dept ON students(department);",
-                "CREATE INDEX IF NOT EXISTS idx_students_approval ON students(approval_status);",
-                "CREATE INDEX IF NOT EXISTS idx_attendance_session ON attendance(session_id);",
-                "CREATE INDEX IF NOT EXISTS idx_attendance_student ON attendance(student_id);"
+                """
             ]
         else:
-            statements = [
+            table_statements = [
                 """
                 CREATE TABLE IF NOT EXISTS admins (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -271,11 +265,11 @@ def init_db() -> None:
                     name TEXT,
                     email TEXT UNIQUE NOT NULL,
                     phone TEXT UNIQUE NOT NULL,
-                    department TEXT NOT NULL,
-                    semester INTEGER DEFAULT 1 CHECK (semester BETWEEN 1 AND 8),
+                    department TEXT,
+                    semester INTEGER DEFAULT 1,
                     bio TEXT DEFAULT '',
-                    phone_verified INTEGER DEFAULT 0 CHECK (phone_verified IN (0, 1)),
-                    email_verified INTEGER DEFAULT 0 CHECK (email_verified IN (0, 1)),
+                    phone_verified INTEGER DEFAULT 0,
+                    email_verified INTEGER DEFAULT 0,
                     approval_status TEXT DEFAULT 'PENDING',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
@@ -304,23 +298,22 @@ def init_db() -> None:
                     FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
                     UNIQUE(session_id, student_id)
                 );
-                """,
-                "CREATE INDEX IF NOT EXISTS idx_students_email ON students(email);",
-                "CREATE INDEX IF NOT EXISTS idx_students_phone ON students(phone);",
-                "CREATE INDEX IF NOT EXISTS idx_students_dept ON students(department);",
-                "CREATE INDEX IF NOT EXISTS idx_students_approval ON students(approval_status);",
-                "CREATE INDEX IF NOT EXISTS idx_attendance_session ON attendance(session_id);",
-                "CREATE INDEX IF NOT EXISTS idx_attendance_student ON attendance(student_id);"
+                """
             ]
 
-        for stmt in statements:
+        for stmt in table_statements:
             cursor.execute(stmt.strip())
 
         # ---------------------------------------------------------
-        # 2. Safe Dynamic Migrations for Existing Tables
+        # PHASE 2: Dynamic Column Migrations (Precedes index creation)
         # ---------------------------------------------------------
-        _ensure_column_exists(cursor, "students", "full_name", "TEXT DEFAULT ''")
+        _ensure_column_exists(cursor, "students", "full_name", "VARCHAR(150) DEFAULT ''")
+        _ensure_column_exists(cursor, "students", "name", "VARCHAR(150) DEFAULT ''")
+        _ensure_column_exists(cursor, "students", "department", "VARCHAR(100) DEFAULT 'General'")
+        _ensure_column_exists(cursor, "students", "semester", "INT DEFAULT 1")
         _ensure_column_exists(cursor, "students", "bio", "TEXT DEFAULT ''")
+        _ensure_column_exists(cursor, "students", "phone_verified", "SMALLINT DEFAULT 0")
+        _ensure_column_exists(cursor, "students", "email_verified", "SMALLINT DEFAULT 0")
         _ensure_column_exists(cursor, "students", "approval_status", "VARCHAR(50) DEFAULT 'PENDING'")
 
         # Sync legacy 'name' column to 'full_name' if upgrading an existing database
@@ -334,7 +327,21 @@ def init_db() -> None:
             pass
 
         # ---------------------------------------------------------
-        # 3. Automated Seed Data (Idempotent)
+        # PHASE 3: Create Indexes (Safe: columns are guaranteed to exist)
+        # ---------------------------------------------------------
+        index_statements = [
+            "CREATE INDEX IF NOT EXISTS idx_students_email ON students(email);",
+            "CREATE INDEX IF NOT EXISTS idx_students_phone ON students(phone);",
+            "CREATE INDEX IF NOT EXISTS idx_students_dept ON students(department);",
+            "CREATE INDEX IF NOT EXISTS idx_students_approval ON students(approval_status);",
+            "CREATE INDEX IF NOT EXISTS idx_attendance_session ON attendance(session_id);",
+            "CREATE INDEX IF NOT EXISTS idx_attendance_student ON attendance(student_id);"
+        ]
+        for idx in index_statements:
+            cursor.execute(idx.strip())
+
+        # ---------------------------------------------------------
+        # PHASE 4: Automated Seed Data (Idempotent)
         # ---------------------------------------------------------
         cursor.execute("SELECT COUNT(*) as count FROM students;")
         st_count_row = cursor.fetchone()
@@ -349,7 +356,7 @@ def init_db() -> None:
                     "+919741007422",
                     "Computer Science",
                     8,
-                    "AI Systems Architect & Founder focusing on Agentic AI and Distributed Systems.",
+                    "AI Systems Architect & Founder focusing on Agentic AI, EDA, and Kernel Drivers.",
                     1,
                     1,
                     "APPROVED"
@@ -361,10 +368,10 @@ def init_db() -> None:
                     "+919876543211",
                     "Artificial Intelligence",
                     6,
-                    "Working on small language models fine-tuning and evaluation.",
+                    "Specializing in small language models, quantization, and ONNX Runtime execution.",
                     1,
                     1,
-                    "PENDING"
+                    "APPROVED"
                 ),
                 (
                     "Priya Sharma",
@@ -372,11 +379,11 @@ def init_db() -> None:
                     "priya.s@pragyanai.com",
                     "+919876543212",
                     "Electronics",
-                    4,
-                    "Embedded Linux engineer researching real-time kernel optimizations.",
+                    6,
+                    "Embedded Linux engineer researching real-time kernel optimizations and Yocto.",
                     1,
-                    0,
-                    "PENDING"
+                    1,
+                    "APPROVED"
                 ),
                 (
                     "Ananya Patel",
@@ -384,11 +391,11 @@ def init_db() -> None:
                     "ananya.p@pragyanai.com",
                     "+919876543213",
                     "Information Tech",
-                    2,
-                    "Student specializing in distributed databases and microservices.",
-                    0,
-                    0,
-                    "REJECTED"
+                    4,
+                    "Student focusing on distributed databases, vector indexes, and microservices.",
+                    1,
+                    1,
+                    "APPROVED"
                 ),
             ]
             cursor.executemany("""
@@ -406,29 +413,21 @@ def init_db() -> None:
         if sess_count == 0:
             sample_sessions = [
                 (
-                    "Introduction to Agentic AI & LangGraph",
+                    "Agentic AI Architecture & Multi-Agent LangGraph Systems",
                     "2026-10-01",
-                    "10:00 AM - 12:00 PM",
+                    "10:00 AM - 12:30 PM",
                     "Online",
                     "https://meet.google.com/abc-prag-xyz",
-                    "Deep dive into multi-agent loops, state machines, and tool execution."
+                    "Architecture patterns for cyclic graphs, persistent state checkpoints, human-in-the-loop workflows, and dynamic tool orchestration."
                 ),
                 (
-                    "FastAPI Microservices & Realtime Event Streaming",
-                    "2026-10-03",
+                    "Linux Kernel Drivers & Edge AI Acceleration",
+                    "2026-10-04",
                     "02:00 PM - 04:30 PM",
-                    "Online",
-                    "https://meet.google.com/def-prag-uvw",
-                    "Building resilient REST APIs, SSE endpoints, and containerizing apps."
-                ),
-                (
-                    "Edge AI Deployment on Linux Kernels & Embedded Hardware",
-                    "2026-10-07",
-                    "11:00 AM - 01:00 PM",
                     "Hybrid",
-                    "Lab 4B / https://meet.google.com/ghi-prag-rst",
-                    "Hands-on model compilation and latency profiling on physical targets."
-                ),
+                    "Lab 4B / https://meet.google.com/def-prag-uvw",
+                    "Writing character device drivers, handling DMA transfers, interrupt handlers, and profiling NPU inferencing latency."
+                )
             ]
             cursor.executemany("""
                 INSERT INTO sessions (
@@ -443,10 +442,8 @@ def init_db() -> None:
 
         if att_count == 0:
             sample_attendance = [
-                (1, 1, "PRESENT", "Active participant during Q&A and code walkthrough."),
-                (1, 2, "SUBMITTED", "Submitted via student portal. Verification pending."),
-                (2, 1, "PRESENT", "Verified on call; completed live notebook exercises."),
-                (2, 3, "ABSENT", "Did not join session link."),
+                (1, 1, "PRESENT", "Active participant during live Q&A and code walkthrough."),
+                (1, 2, "SUBMITTED", "Submitted via student portal; verification pending.")
             ]
             cursor.executemany("""
                 INSERT INTO attendance (
@@ -472,4 +469,4 @@ def get_db() -> Generator[UnifiedConnection, None, None]:
 if __name__ == "__main__":
     init_db()
     engine_name = "PostgreSQL" if IS_POSTGRES else "SQLite"
-    print(f"Database initialized successfully using engine: {engine_name}")
+    print(f"Database initialized and migrated successfully using engine: {engine_name}")
