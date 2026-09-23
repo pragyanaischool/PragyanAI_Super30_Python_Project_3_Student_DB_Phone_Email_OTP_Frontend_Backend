@@ -1,8 +1,8 @@
-"""Database connection and lifecycle manager.
+"""Database Connection and Lifecycle Manager.
 
 Provides dual-engine compatibility for SQLite (local development) and
 PostgreSQL (Render managed database), including pooled connections, dynamic schema
-initialization, connection pooling context management, and row-dict mapping.
+initialization, safe column migrations, and automatic seed data generation.
 """
 
 import os
@@ -39,7 +39,6 @@ if IS_POSTGRES:
 
 class UnifiedCursor:
     """Cursor wrapper that transparently adapts parameter placeholders between
-
     SQLite ('?') and PostgreSQL ('%s'), supports dict rows, iteration, and RETURNING.
     """
 
@@ -53,7 +52,7 @@ class UnifiedCursor:
         if self._is_postgres:
             if "?" in sql and "%s" not in sql:
                 sql = sql.replace("?", "%s")
-            
+
             # If query is an INSERT and doesn't specify RETURNING, append RETURNING id for lastrowid compatibility
             stripped = sql.strip().rstrip(";").strip()
             if stripped.upper().startswith("INSERT INTO") and "RETURNING" not in stripped.upper():
@@ -66,7 +65,7 @@ class UnifiedCursor:
                 except Exception:
                     self._last_inserted_id = None
                 return result
-            
+
             return self._cursor.execute(sql, params or ())
         else:
             if "%s" in sql and "?" not in sql:
@@ -170,11 +169,31 @@ def get_raw_connection() -> UnifiedConnection:
         return UnifiedConnection(raw_conn, is_postgres=False, is_pooled=False)
 
 
+def _ensure_column_exists(cursor: UnifiedCursor, table: str, column: str, col_type: str):
+    """Safely checks and adds a column if it does not exist without dropping tables."""
+    try:
+        if IS_POSTGRES:
+            cursor.execute(f"""
+                ALTER TABLE {table} 
+                ADD COLUMN IF NOT EXISTS {column} {col_type};
+            """)
+        else:
+            cursor.execute(f"PRAGMA table_info({table});")
+            existing_cols = [row["name"] for row in cursor.fetchall()]
+            if column not in existing_cols:
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type};")
+    except Exception as e:
+        print(f"[!] Migration notice on {table}.{column}: {e}")
+
+
 def init_db() -> None:
-    """Initializes tables and indexes, executing each DDL statement individually."""
+    """Initializes tables, creates indexes, applies safe column migrations, and populates seed data."""
     with get_db() as conn:
         cursor = conn.cursor()
 
+        # ---------------------------------------------------------
+        # 1. Base Schemas (PostgreSQL & SQLite)
+        # ---------------------------------------------------------
         if IS_POSTGRES:
             statements = [
                 """
@@ -190,19 +209,48 @@ def init_db() -> None:
                 """
                 CREATE TABLE IF NOT EXISTS students (
                     id SERIAL PRIMARY KEY,
-                    name VARCHAR(150) NOT NULL,
+                    full_name VARCHAR(150),
+                    name VARCHAR(150),
                     email VARCHAR(255) UNIQUE NOT NULL,
                     phone VARCHAR(50) UNIQUE NOT NULL,
                     department VARCHAR(100) NOT NULL,
-                    semester INT CHECK (semester BETWEEN 1 AND 8),
+                    semester INT DEFAULT 1 CHECK (semester BETWEEN 1 AND 8),
+                    bio TEXT DEFAULT '',
                     phone_verified SMALLINT DEFAULT 0 CHECK (phone_verified IN (0, 1)),
                     email_verified SMALLINT DEFAULT 0 CHECK (email_verified IN (0, 1)),
+                    approval_status VARCHAR(50) DEFAULT 'PENDING',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id SERIAL PRIMARY KEY,
+                    topic VARCHAR(255) NOT NULL,
+                    session_date VARCHAR(50) NOT NULL,
+                    timing VARCHAR(100) NOT NULL,
+                    mode VARCHAR(50) DEFAULT 'Online',
+                    meeting_link VARCHAR(500) NOT NULL,
+                    description TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS attendance (
+                    id SERIAL PRIMARY KEY,
+                    session_id INT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                    student_id INT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+                    status VARCHAR(50) DEFAULT 'SUBMITTED',
+                    remarks TEXT DEFAULT '',
+                    submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT unique_session_student UNIQUE (session_id, student_id)
                 );
                 """,
                 "CREATE INDEX IF NOT EXISTS idx_students_email ON students(email);",
                 "CREATE INDEX IF NOT EXISTS idx_students_phone ON students(phone);",
-                "CREATE INDEX IF NOT EXISTS idx_students_dept ON students(department);"
+                "CREATE INDEX IF NOT EXISTS idx_students_dept ON students(department);",
+                "CREATE INDEX IF NOT EXISTS idx_students_approval ON students(approval_status);",
+                "CREATE INDEX IF NOT EXISTS idx_attendance_session ON attendance(session_id);",
+                "CREATE INDEX IF NOT EXISTS idx_attendance_student ON attendance(student_id);"
             ]
         else:
             statements = [
@@ -219,25 +267,192 @@ def init_db() -> None:
                 """
                 CREATE TABLE IF NOT EXISTS students (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT NOT NULL,
+                    full_name TEXT,
+                    name TEXT,
                     email TEXT UNIQUE NOT NULL,
                     phone TEXT UNIQUE NOT NULL,
                     department TEXT NOT NULL,
-                    semester INTEGER CHECK (semester BETWEEN 1 AND 8),
+                    semester INTEGER DEFAULT 1 CHECK (semester BETWEEN 1 AND 8),
+                    bio TEXT DEFAULT '',
                     phone_verified INTEGER DEFAULT 0 CHECK (phone_verified IN (0, 1)),
                     email_verified INTEGER DEFAULT 0 CHECK (email_verified IN (0, 1)),
+                    approval_status TEXT DEFAULT 'PENDING',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    topic TEXT NOT NULL,
+                    session_date TEXT NOT NULL,
+                    timing TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    meeting_link TEXT NOT NULL,
+                    description TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS attendance (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id INTEGER NOT NULL,
+                    student_id INTEGER NOT NULL,
+                    status TEXT DEFAULT 'SUBMITTED',
+                    remarks TEXT DEFAULT '',
+                    submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+                    FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
+                    UNIQUE(session_id, student_id)
                 );
                 """,
                 "CREATE INDEX IF NOT EXISTS idx_students_email ON students(email);",
                 "CREATE INDEX IF NOT EXISTS idx_students_phone ON students(phone);",
-                "CREATE INDEX IF NOT EXISTS idx_students_dept ON students(department);"
+                "CREATE INDEX IF NOT EXISTS idx_students_dept ON students(department);",
+                "CREATE INDEX IF NOT EXISTS idx_students_approval ON students(approval_status);",
+                "CREATE INDEX IF NOT EXISTS idx_attendance_session ON attendance(session_id);",
+                "CREATE INDEX IF NOT EXISTS idx_attendance_student ON attendance(student_id);"
             ]
 
         for stmt in statements:
             cursor.execute(stmt.strip())
 
-        conn.commit()
+        # ---------------------------------------------------------
+        # 2. Safe Dynamic Migrations for Existing Tables
+        # ---------------------------------------------------------
+        _ensure_column_exists(cursor, "students", "full_name", "TEXT DEFAULT ''")
+        _ensure_column_exists(cursor, "students", "bio", "TEXT DEFAULT ''")
+        _ensure_column_exists(cursor, "students", "approval_status", "VARCHAR(50) DEFAULT 'PENDING'")
+
+        # Sync legacy 'name' column to 'full_name' if upgrading an existing database
+        try:
+            cursor.execute("""
+                UPDATE students 
+                SET full_name = name 
+                WHERE (full_name IS NULL OR full_name = '') AND name IS NOT NULL;
+            """)
+        except Exception:
+            pass
+
+        # ---------------------------------------------------------
+        # 3. Automated Seed Data (Idempotent)
+        # ---------------------------------------------------------
+        cursor.execute("SELECT COUNT(*) as count FROM students;")
+        st_count_row = cursor.fetchone()
+        st_count = st_count_row.get("count", 0) if st_count_row else 0
+
+        if st_count == 0:
+            sample_students = [
+                (
+                    "Sateesh Ambesange",
+                    "Sateesh Ambesange",
+                    "sateesh.ambesange@pragyanai.com",
+                    "+919741007422",
+                    "Computer Science",
+                    8,
+                    "AI Systems Architect & Founder focusing on Agentic AI and Distributed Systems.",
+                    1,
+                    1,
+                    "APPROVED"
+                ),
+                (
+                    "Rohan Kumar",
+                    "Rohan Kumar",
+                    "rohan.k@pragyanai.com",
+                    "+919876543211",
+                    "Artificial Intelligence",
+                    6,
+                    "Working on small language models fine-tuning and evaluation.",
+                    1,
+                    1,
+                    "PENDING"
+                ),
+                (
+                    "Priya Sharma",
+                    "Priya Sharma",
+                    "priya.s@pragyanai.com",
+                    "+919876543212",
+                    "Electronics",
+                    4,
+                    "Embedded Linux engineer researching real-time kernel optimizations.",
+                    1,
+                    0,
+                    "PENDING"
+                ),
+                (
+                    "Ananya Patel",
+                    "Ananya Patel",
+                    "ananya.p@pragyanai.com",
+                    "+919876543213",
+                    "Information Tech",
+                    2,
+                    "Student specializing in distributed databases and microservices.",
+                    0,
+                    0,
+                    "REJECTED"
+                ),
+            ]
+            cursor.executemany("""
+                INSERT INTO students (
+                    full_name, name, email, phone, department, semester, bio,
+                    phone_verified, email_verified, approval_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, sample_students)
+
+        # Check sessions table
+        cursor.execute("SELECT COUNT(*) as count FROM sessions;")
+        sess_count_row = cursor.fetchone()
+        sess_count = sess_count_row.get("count", 0) if sess_count_row else 0
+
+        if sess_count == 0:
+            sample_sessions = [
+                (
+                    "Introduction to Agentic AI & LangGraph",
+                    "2026-10-01",
+                    "10:00 AM - 12:00 PM",
+                    "Online",
+                    "https://meet.google.com/abc-prag-xyz",
+                    "Deep dive into multi-agent loops, state machines, and tool execution."
+                ),
+                (
+                    "FastAPI Microservices & Realtime Event Streaming",
+                    "2026-10-03",
+                    "02:00 PM - 04:30 PM",
+                    "Online",
+                    "https://meet.google.com/def-prag-uvw",
+                    "Building resilient REST APIs, SSE endpoints, and containerizing apps."
+                ),
+                (
+                    "Edge AI Deployment on Linux Kernels & Embedded Hardware",
+                    "2026-10-07",
+                    "11:00 AM - 01:00 PM",
+                    "Hybrid",
+                    "Lab 4B / https://meet.google.com/ghi-prag-rst",
+                    "Hands-on model compilation and latency profiling on physical targets."
+                ),
+            ]
+            cursor.executemany("""
+                INSERT INTO sessions (
+                    topic, session_date, timing, mode, meeting_link, description
+                ) VALUES (?, ?, ?, ?, ?, ?);
+            """, sample_sessions)
+
+        # Check attendance table
+        cursor.execute("SELECT COUNT(*) as count FROM attendance;")
+        att_count_row = cursor.fetchone()
+        att_count = att_count_row.get("count", 0) if att_count_row else 0
+
+        if att_count == 0:
+            sample_attendance = [
+                (1, 1, "PRESENT", "Active participant during Q&A and code walkthrough."),
+                (1, 2, "SUBMITTED", "Submitted via student portal. Verification pending."),
+                (2, 1, "PRESENT", "Verified on call; completed live notebook exercises."),
+                (2, 3, "ABSENT", "Did not join session link."),
+            ]
+            cursor.executemany("""
+                INSERT INTO attendance (
+                    session_id, student_id, status, remarks
+                ) VALUES (?, ?, ?, ?);
+            """, sample_attendance)
 
 
 @contextmanager
@@ -252,3 +467,9 @@ def get_db() -> Generator[UnifiedConnection, None, None]:
         raise
     finally:
         connection.close()
+
+
+if __name__ == "__main__":
+    init_db()
+    engine_name = "PostgreSQL" if IS_POSTGRES else "SQLite"
+    print(f"Database initialized successfully using engine: {engine_name}")
