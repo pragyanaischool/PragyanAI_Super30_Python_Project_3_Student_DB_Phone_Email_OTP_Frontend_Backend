@@ -42,7 +42,7 @@ def list_onboarding_students(
         if clean_filter in ("PENDING", "APPROVED", "REJECTED"):
             cursor.execute(
                 """
-                SELECT id, full_name, email, phone, department, bio,
+                SELECT id, full_name, email, phone, department, semester, bio,
                        email_verified, phone_verified, approval_status, created_at
                 FROM students 
                 WHERE approval_status = ?
@@ -53,7 +53,7 @@ def list_onboarding_students(
         else:
             cursor.execute(
                 """
-                SELECT id, full_name, email, phone, department, bio,
+                SELECT id, full_name, email, phone, department, semester, bio,
                        email_verified, phone_verified, approval_status, created_at
                 FROM students 
                 ORDER BY id DESC;
@@ -89,6 +89,7 @@ def set_student_approval_status(student_id: int, payload: StudentApprovalAction)
             )
 
     return {
+        "status": "success",
         "message": f"Student #{student_id} successfully marked as {decision}.",
         "student_id": student_id,
         "approval_status": decision,
@@ -125,6 +126,7 @@ def create_session(payload: SessionCreate):
         new_session_id = cursor.lastrowid
 
     return {
+        "status": "success",
         "message": "Academic session created and published successfully.",
         "session_id": new_session_id,
         "topic": payload.topic,
@@ -207,8 +209,9 @@ def review_student_attendance(
             INSERT INTO attendance (session_id, student_id, status, remarks)
             VALUES (?, ?, ?, ?)
             ON CONFLICT(session_id, student_id) DO UPDATE SET
-            status = excluded.status,
-            remarks = excluded.remarks;
+                status = excluded.status,
+                remarks = excluded.remarks,
+                submitted_at = CURRENT_TIMESTAMP;
             """,
             (
                 session_id,
@@ -219,6 +222,7 @@ def review_student_attendance(
         )
 
     return {
+        "status": "success",
         "message": f"Student #{student_id} attendance updated to {payload.status.value}.",
         "session_id": session_id,
         "student_id": student_id,
@@ -240,12 +244,14 @@ def get_attendance_analytics():
     with get_db() as conn:
         cursor = conn.cursor()
 
-        # Total eligible (approved) students
+        # Total eligible (approved) students - safely read dict key instead of tuple index [0]
         cursor.execute(
-            "SELECT COUNT(*) FROM students WHERE approval_status = 'APPROVED';"
+            "SELECT COUNT(*) AS count FROM students WHERE approval_status = 'APPROVED';"
         )
-        total_eligible = cursor.fetchone()[0]
+        row = cursor.fetchone()
+        total_eligible = row["count"] if row else 0
 
+        # Group by all selected non-aggregate columns to strictly adhere to Postgres standard SQL
         cursor.execute(
             """
             SELECT 
@@ -258,7 +264,7 @@ def get_attendance_analytics():
                 SUM(CASE WHEN a.status = 'SUBMITTED' THEN 1 ELSE 0 END) as submitted_count
             FROM sessions s
             LEFT JOIN attendance a ON s.id = a.session_id
-            GROUP BY s.id
+            GROUP BY s.id, s.topic, s.session_date, s.mode
             ORDER BY s.session_date DESC, s.id DESC;
             """
         )
@@ -266,9 +272,9 @@ def get_attendance_analytics():
 
         analytics_report = []
         for r in rows:
-            p_cnt = r["present_count"] or 0
-            a_cnt = r["absent_count"] or 0
-            s_cnt = r["submitted_count"] or 0
+            p_cnt = r.get("present_count") or 0
+            a_cnt = r.get("absent_count") or 0
+            s_cnt = r.get("submitted_count") or 0
             accounted = p_cnt + a_cnt + s_cnt
             unaccounted = max(0, total_eligible - accounted)
 
