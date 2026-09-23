@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+pydantic[email]
+python-dotenv
+twilio
+pytest
+httpx
+psycopg2-binary
+pydantic-settings
