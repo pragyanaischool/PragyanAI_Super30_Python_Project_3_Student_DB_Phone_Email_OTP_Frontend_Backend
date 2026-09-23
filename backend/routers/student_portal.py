@@ -1,16 +1,17 @@
 """Student Portal Endpoints.
 
-Handles student profile management, browsing scheduled training/curriculum sessions,
+Handles student profile management, browsing scheduled curriculum sessions,
 session detail retrieval, self-service attendance submission, and personal attendance history.
 """
 
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, HTTPException, status
 from backend.database import get_db
 from backend.models.academic_models import (
     StudentProfileUpdate,
     AttendanceSubmit,
     StudentAttendanceRecord,
+    SessionCreate,
 )
 
 router = APIRouter(prefix="/api/student", tags=["Student Portal"])
@@ -27,7 +28,7 @@ def get_student_profile(student_id: int):
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT id, full_name, email, phone, department, bio, 
+            SELECT id, full_name, email, phone, department, semester, bio, 
                    email_verified, phone_verified, approval_status, created_at
             FROM students 
             WHERE id = ?;
@@ -75,7 +76,7 @@ def update_student_profile(student_id: int, payload: StudentProfileUpdate):
                 detail=f"Student record with ID {student_id} was not found.",
             )
 
-    return {"message": "Profile updated successfully."}
+    return {"status": "success", "message": "Profile updated successfully."}
 
 
 @router.get(
@@ -94,8 +95,7 @@ def list_available_sessions():
             ORDER BY session_date ASC, id ASC;
             """
         )
-        sessions = [dict(row) for row in cursor.fetchall()]
-        return sessions
+        return [dict(row) for row in cursor.fetchall()]
 
 
 @router.get(
@@ -133,7 +133,8 @@ def submit_session_attendance(payload: AttendanceSubmit):
     """Self-submit attendance for an active session.
 
     Logs the student's submission as 'SUBMITTED' pending admin review.
-    If already submitted, refreshes the submission timestamp.
+    Guards against altering an attendance record that has already been verified
+    by an instructor as PRESENT or ABSENT.
     """
     with get_db() as conn:
         cursor = conn.cursor()
@@ -152,7 +153,7 @@ def submit_session_attendance(payload: AttendanceSubmit):
         if student["approval_status"] != "APPROVED":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Student onboarding status is '{student['approval_status']}'. Must be 'APPROVED' to submit attendance.",
+                detail=f"Attendance recording locked. Account onboarding status is '{student['approval_status']}'. Must be 'APPROVED'.",
             )
 
         # 2. Validate session existence
@@ -166,19 +167,34 @@ def submit_session_attendance(payload: AttendanceSubmit):
                 detail=f"Session #{payload.session_id} not found.",
             )
 
-        # 3. Upsert attendance record
+        # 3. Check existing attendance record status
+        cursor.execute(
+            "SELECT status FROM attendance WHERE session_id = ? AND student_id = ?;",
+            (payload.session_id, payload.student_id),
+        )
+        existing_att = cursor.fetchone()
+
+        if existing_att and existing_att["status"] in ("PRESENT", "ABSENT"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Attendance already finalized as '{existing_att['status']}' by the instructor.",
+            )
+
+        # 4. Upsert attendance record
         cursor.execute(
             """
             INSERT INTO attendance (session_id, student_id, status, remarks)
             VALUES (?, ?, 'SUBMITTED', 'Self-submitted via student dashboard')
             ON CONFLICT(session_id, student_id) DO UPDATE SET
-            status = 'SUBMITTED',
-            submitted_at = CURRENT_TIMESTAMP;
+                status = 'SUBMITTED',
+                remarks = 'Self-submitted via student dashboard',
+                submitted_at = CURRENT_TIMESTAMP;
             """,
             (payload.session_id, payload.student_id),
         )
 
     return {
+        "status": "success",
         "message": "Attendance recorded successfully. Pending instructor approval.",
         "student_id": payload.student_id,
         "session_id": payload.session_id,
@@ -191,20 +207,19 @@ def submit_session_attendance(payload: AttendanceSubmit):
     response_model=List[StudentAttendanceRecord],
 )
 def get_student_attendance_history(student_id: int):
-    """Fetch complete session attendance history and verification status for a student."""
+    """Fetch complete academic curriculum sessions and student verification statuses."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
             SELECT s.topic, s.session_date, s.timing, s.mode,
-                   a.status, COALESCE(a.remarks, '') as remarks,
+                   COALESCE(a.status, 'NOT_SUBMITTED') AS status,
+                   COALESCE(a.remarks, '') AS remarks,
                    a.submitted_at
-            FROM attendance a
-            JOIN sessions s ON a.session_id = s.id
-            WHERE a.student_id = ?
-            ORDER BY s.session_date DESC;
+            FROM sessions s
+            LEFT JOIN attendance a ON s.id = a.session_id AND a.student_id = ?
+            ORDER BY s.session_date DESC, s.id DESC;
             """,
             (student_id,),
         )
-        records = [dict(row) for row in cursor.fetchall()]
-        return records
+        return [dict(row) for row in cursor.fetchall()]
