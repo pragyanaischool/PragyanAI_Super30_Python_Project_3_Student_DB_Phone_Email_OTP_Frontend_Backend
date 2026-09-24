@@ -1,8 +1,8 @@
 /**
  * Frontend Application Controller for PragyanAI EduPortal
  * Manages Clean Initial Login View, Session State, Role-Based Dashboards,
- * Registration & Dual-OTP Verification, Analytics, Detailed Academic & Parent Profile,
- * Course-Specific Attendance Claims, and Administrative Governance.
+ * Registration & Dual-OTP Verification, Live OTP Display/Debug Inspector,
+ * Registration Confirmation, Academic/Parent Profiles, and Attendance Governance.
  */
 
 // -------------------------------------------------------------
@@ -29,12 +29,15 @@ let globalSessions = [];
 
 // Active Student Verification Session for Onboarding
 let activeStudent = {
+  fullName: "",
   phone: "",
   email: "",
   phoneVerified: false,
   emailVerified: false,
   phoneTimer: null,
-  emailTimer: null
+  emailTimer: null,
+  cachedSmsOtp: "",
+  cachedEmailOtp: ""
 };
 
 // -------------------------------------------------------------
@@ -67,7 +70,7 @@ function logoutSession() {
 function restoreSession() {
   const session = getSession();
 
-  // 1. Layout Mode Switcher (Auth Landing Page vs. Logged-in App Shell)
+  // Layout Mode Switcher (Auth Landing Page vs. Logged-in App Shell)
   const authPageView = document.getElementById("auth-page-view");
   const appViewContainer = document.getElementById("app-view-container");
 
@@ -219,6 +222,9 @@ async function handleStudentLogin(e) {
     setSession("student", data.user);
     closeAuthModal();
     showNotification(null, `Welcome back, ${data.user.full_name}!`, "success");
+
+    // Route straight to student portal
+    switchTab("student-tab");
   } catch (err) {
     showNotification(null, err.message, "danger");
   }
@@ -249,6 +255,9 @@ async function handleAdminLogin(e) {
     setSession("admin", data.user);
     closeAuthModal();
     showNotification(null, `Welcome Administrator ${data.user.username}!`, "success");
+
+    // Route to Admin Governance dashboard
+    switchTab("admin-gov-tab");
   } catch (err) {
     showNotification(null, err.message, "danger");
   }
@@ -482,7 +491,6 @@ async function loadStudentEnrolledCourse(studentId) {
 async function submitAttendanceClaim(param1, param2, param3) {
   let studentId, sessionId, claim;
 
-  // Polymorphic support: submitAttendanceClaim(studentId, sessionId, claim) or submitAttendanceClaim(sessionId, claim)
   if (param3 !== undefined) {
     studentId = param1;
     sessionId = param2;
@@ -658,6 +666,7 @@ async function handleRegistration(e) {
     if (!res.ok) throw new Error(data.detail || "Registration failed");
 
     // Cache credentials for OTP verification
+    activeStudent.fullName = payload.full_name;
     activeStudent.phone = payload.phone;
     activeStudent.email = payload.email;
     activeStudent.phoneVerified = false;
@@ -673,9 +682,13 @@ async function handleRegistration(e) {
     const drawer = document.getElementById("otpDrawer");
     if (drawer) drawer.classList.remove("hidden");
 
+    const confirmCard = document.getElementById("registrationConfirmationCard");
+    if (confirmCard) confirmCard.classList.add("hidden");
+
+    // Reset verification input states
     ["phoneVerifyBadge", "emailVerifyBadge"].forEach(id => {
       const el = document.getElementById(id);
-      if (el) el.innerText = "";
+      if (el) { el.innerText = "Pending Verification"; el.style.color = "#f59e0b"; }
     });
     ["phoneOtpInput", "emailOtpInput", "verify-phone-otp", "verify-email-otp"].forEach(id => {
       const el = document.getElementById(id);
@@ -688,6 +701,11 @@ async function handleRegistration(e) {
 
     startCooldownTimer("phone", 30);
     startCooldownTimer("email", 30);
+
+    // 🌟 Immediately fetch and display the generated OTPs in the Debug Banner
+    setTimeout(() => {
+      fetchActiveOtpDebug();
+    }, 400);
 
   } catch (err) {
     showNotification(notify, err.message, "danger");
@@ -720,6 +738,9 @@ async function verifyOTP(type) {
     return;
   }
 
+  const btnVerify = document.getElementById(isPhone ? "btnVerifyPhone" : "btnVerifyEmail");
+  if (btnVerify) { btnVerify.disabled = true; btnVerify.innerText = "Verifying..."; }
+
   try {
     const res = await fetch(`${API_BASE}/api/students/verify-otp`, {
       method: "POST",
@@ -733,30 +754,60 @@ async function verifyOTP(type) {
     showNotification(notify, `✓ ${data.message}`, "success");
 
     if (inputEl) inputEl.disabled = true;
-    const btn = document.getElementById(isPhone ? "btnVerifyPhone" : "btnVerifyEmail");
-    if (btn) btn.disabled = true;
+    if (btnVerify) { btnVerify.disabled = true; btnVerify.innerText = "Verified"; }
 
     const resendBtn = document.getElementById(isPhone ? "btnResendPhone" : "btnResendEmail");
     if (resendBtn) resendBtn.disabled = true;
 
     const badge = document.getElementById(isPhone ? "phoneVerifyBadge" : "emailVerifyBadge");
     if (badge) {
-      badge.innerText = "✓ Verified";
+      badge.innerText = "✓ Channel Verified";
       badge.style.color = "#10b981";
     }
 
     if (isPhone) activeStudent.phoneVerified = true;
     else activeStudent.emailVerified = true;
 
-    if (activeStudent.phoneVerified && activeStudent.emailVerified) {
-      showNotification(notify, "🎉 All credentials verified! You can now sign in to your dashboard.", "success");
-      setTimeout(() => showAuthView("stu-login"), 1500);
-      fetchTableData();
-    }
+    // Check if both SMS and Email are successfully verified
+    checkAndDisplayRegistrationConfirmation();
 
   } catch (err) {
     showNotification(notify, err.message, "danger");
+    if (btnVerify) { btnVerify.disabled = false; btnVerify.innerText = "Verify"; }
   }
+}
+
+function checkAndDisplayRegistrationConfirmation() {
+  if (activeStudent.phoneVerified && activeStudent.emailVerified) {
+    showNotification(null, "🎉 Dual-Channel Verification Succeeded! Onboarding confirmation generated.", "success");
+
+    // Populate confirmation details
+    const nameEl = document.getElementById("confirm-student-name");
+    const emailEl = document.getElementById("confirm-student-email");
+    const phoneEl = document.getElementById("confirm-student-phone");
+
+    if (nameEl) nameEl.innerText = activeStudent.fullName || "Registered Student";
+    if (emailEl) emailEl.innerText = activeStudent.email;
+    if (phoneEl) phoneEl.innerText = activeStudent.phone;
+
+    // Reveal confirmation card
+    const confirmCard = document.getElementById("registrationConfirmationCard");
+    if (confirmCard) {
+      confirmCard.classList.remove("hidden");
+      confirmCard.scrollIntoView({ behavior: "smooth" });
+    }
+  }
+}
+
+function proceedToSignInAfterConfirmation() {
+  // Pre-fill email in student login form
+  const loginIdent = document.getElementById("stu-login-ident");
+  if (loginIdent && activeStudent.email) {
+    loginIdent.value = activeStudent.email;
+  }
+
+  showAuthView("stu-login");
+  showNotification(null, "Please enter your password to sign in.", "success");
 }
 
 async function handleResendOTP(channel) {
@@ -792,10 +843,29 @@ async function handleResendOTP(channel) {
     showNotification(notify, `✓ ${data.message}`, "success");
     startCooldownTimer(channel, 45);
 
+    // Refresh debug code readouts immediately
+    setTimeout(() => {
+      fetchActiveOtpDebug();
+    }, 400);
+
   } catch (err) {
     showNotification(notify, err.message, "danger");
     if (resendBtn) resendBtn.disabled = false;
   }
+}
+
+async function forceResendBothChannels() {
+  if (!activeStudent.phone || !activeStudent.email) {
+    showNotification(null, "Please submit your registration form first.", "danger");
+    return;
+  }
+
+  showNotification(null, "🔄 Re-dispatching codes to SMS and Email...", "success");
+
+  await Promise.all([
+    handleResendOTP("phone"),
+    handleResendOTP("email")
+  ]);
 }
 
 function startCooldownTimer(channel, seconds) {
@@ -824,38 +894,75 @@ function startCooldownTimer(channel, seconds) {
   else activeStudent.emailTimer = timer;
 }
 
+// -------------------------------------------------------------
+// 🔍 5. Active OTP Inspector & Auto-Paste Helper
+// -------------------------------------------------------------
 async function fetchActiveOtpDebug() {
-  const container = document.getElementById("debugCodesContainer");
-  if (!container) return;
+  const phoneTarget = activeStudent.phone || document.getElementById("stuPhone")?.value.trim() || "";
+  const emailTarget = activeStudent.email || document.getElementById("stuEmail")?.value.trim() || "";
 
-  container.classList.remove("hidden");
-  container.innerHTML = `<span style="color: #94a3b8; font-size: 12px;">Querying active test codes...</span>`;
+  if (!phoneTarget && !emailTarget) return;
+
+  const smsDisplay = document.getElementById("debugSmsCode");
+  const emailDisplay = document.getElementById("debugEmailCode");
+
+  if (smsDisplay) smsDisplay.innerText = "Querying...";
+  if (emailDisplay) emailDisplay.innerText = "Querying...";
 
   try {
-    const phoneQuery = encodeURIComponent(activeStudent.phone || "");
-    const emailQuery = encodeURIComponent(activeStudent.email || "");
+    const phoneQ = encodeURIComponent(phoneTarget);
+    const emailQ = encodeURIComponent(emailTarget);
 
-    const [resPhone, resEmail] = await Promise.all([
-      fetch(`${API_BASE}/api/debug/recent-otp?identifier=${phoneQuery}`).then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch(`${API_BASE}/api/debug/recent-otp?identifier=${emailQuery}`).then(r => r.ok ? r.json() : null).catch(() => null)
+    const [resP, resE] = await Promise.all([
+      fetch(`${API_BASE}/api/debug/recent-otp?identifier=${phoneQ}`).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${API_BASE}/api/debug/recent-otp?identifier=${emailQ}`).then(r => r.ok ? r.json() : null).catch(() => null)
     ]);
 
-    const phoneCode = resPhone?.active_otp || "Expired / Not Found";
-    const emailCode = resEmail?.active_otp || "Expired / Not Found";
+    activeStudent.cachedSmsOtp = resP?.active_otp || "";
+    activeStudent.cachedEmailOtp = resE?.active_otp || "";
 
-    container.innerHTML = `
-      <div style="background: #151d30; border: 1px solid #222f49; padding: 10px; border-radius: 6px; font-family: monospace; font-size: 13px; text-align: left; margin-top: 8px;">
-        <div style="color: #38bdf8; margin-bottom: 4px;">📱 SMS OTP: <strong style="color: #10b981; letter-spacing: 2px;">${phoneCode}</strong></div>
-        <div style="color: #38bdf8;">✉️ Email OTP: <strong style="color: #10b981; letter-spacing: 2px;">${emailCode}</strong></div>
-      </div>
-    `;
-  } catch (err) {
-    container.innerHTML = `<span style="color: #ef4444; font-size: 12px;">Failed to load active codes.</span>`;
+    if (smsDisplay) {
+      smsDisplay.innerText = resP?.active_otp || "Pending / Expired";
+      smsDisplay.style.color = resP?.active_otp ? "#10b981" : "#94a3b8";
+    }
+    if (emailDisplay) {
+      emailDisplay.innerText = resE?.active_otp || "Pending / Expired";
+      emailDisplay.style.color = resE?.active_otp ? "#10b981" : "#94a3b8";
+    }
+
+    const legacyContainer = document.getElementById("debugCodesContainer");
+    if (legacyContainer) {
+      legacyContainer.innerHTML = `
+        <div style="background: #151d30; border: 1px solid #222f49; padding: 10px; border-radius: 6px; font-family: monospace; font-size: 13px; text-align: left; margin-top: 8px;">
+          <div style="color: #38bdf8; margin-bottom: 4px;">📱 SMS OTP: <strong style="color: #10b981; letter-spacing: 2px;">${resP?.active_otp || 'Expired / Not Found'}</strong></div>
+          <div style="color: #38bdf8;">✉️ Email OTP: <strong style="color: #10b981; letter-spacing: 2px;">${resE?.active_otp || 'Expired / Not Found'}</strong></div>
+        </div>
+      `;
+    }
+  } catch (e) {
+    if (smsDisplay) smsDisplay.innerText = "Error";
+    if (emailDisplay) emailDisplay.innerText = "Error";
+  }
+}
+
+function autoFillOtp(channel) {
+  if (channel === "phone") {
+    const input = document.getElementById("phoneOtpInput");
+    if (input && activeStudent.cachedSmsOtp) {
+      input.value = activeStudent.cachedSmsOtp;
+      showNotification(null, "Pasted SMS OTP to field.", "success");
+    }
+  } else {
+    const input = document.getElementById("emailOtpInput");
+    if (input && activeStudent.cachedEmailOtp) {
+      input.value = activeStudent.cachedEmailOtp;
+      showNotification(null, "Pasted Email OTP to field.", "success");
+    }
   }
 }
 
 // -------------------------------------------------------------
-// 🛡️ 5. ADMIN GOVERNANCE & ROSTER WORKFLOWS
+// 🛡️ 6. ADMIN GOVERNANCE & ROSTER WORKFLOWS
 // -------------------------------------------------------------
 async function loadAdminGovernanceData() {
   loadAdminOnboarding();
@@ -1062,8 +1169,13 @@ async function loadAdminAttendanceAnalytics() {
 }
 
 // -------------------------------------------------------------
-// 📊 6. Analytics & Student Directory
+// 📊 7. Analytics & Student Directory
 // -------------------------------------------------------------
+async function loadAllAdminData() {
+  loadAnalytics();
+  fetchTableData();
+}
+
 async function loadAnalytics() {
   try {
     const res = await fetch(`${API_BASE}/api/analytics`);
@@ -1232,13 +1344,8 @@ function changePage(delta) {
   fetchTableData();
 }
 
-function loadAllAdminData() {
-  loadAnalytics();
-  fetchTableData();
-}
-
 // -------------------------------------------------------------
-// 🛠️ 7. Utilities & Notifications
+// 🛠️ 8. Utilities & Notifications
 // -------------------------------------------------------------
 function showNotification(el, message, type) {
   if (el) {
@@ -1257,7 +1364,7 @@ function showNotification(el, message, type) {
   banner.textContent = message;
   banner.className = `notify ${isSuccess ? "ok" : "danger"}`;
   banner.style.display = "block";
-  banner.style.background = isSuccess ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)";
+  banner.style.background = isSuccess ? "rgba(16, 185, 129, 0.2)" : "rgba(239, 68, 68, 0.2)";
   banner.style.color = isSuccess ? "#10b981" : "#ef4444";
   banner.style.borderColor = isSuccess ? "#10b981" : "#ef4444";
   banner.classList.remove("hidden");
@@ -1273,7 +1380,7 @@ function escapeHtml(text) {
 }
 
 // -------------------------------------------------------------
-// 🌐 8. Global Window Registration & Lifecycle Bootstrapper
+// 🌐 9. Global Window Registration & Lifecycle Bootstrapper
 // -------------------------------------------------------------
 window.showAuthView = showAuthView;
 window.switchTab = switchTab;
@@ -1293,7 +1400,10 @@ window.verifyOTP = verifyOTP;
 window.verifyOtp = verifyOTP;
 window.handleResendOTP = handleResendOTP;
 window.resendOtp = handleResendOTP;
+window.forceResendBothChannels = forceResendBothChannels;
 window.fetchActiveOtpDebug = fetchActiveOtpDebug;
+window.autoFillOtp = autoFillOtp;
+window.proceedToSignInAfterConfirmation = proceedToSignInAfterConfirmation;
 
 window.loadStudentDashboardData = loadStudentDashboardData;
 window.loadStudentProfile = loadStudentProfile;
