@@ -1,7 +1,8 @@
 """Academic and Operational Pydantic Data Models.
 
-Defines request/response schemas for Student Authentication, Profile Management,
-Session Publishing, Attendance Submissions, and Admin Governance Workflows.
+Defines request/response schemas for Student Authentication, Profile Management
+(including College and Parent details), Course Enrollment, Session Rostering,
+Attendance Claims, and Admin Governance Workflows.
 Fully compatible with Pydantic v2 and Python 3.11 through 3.14+.
 """
 
@@ -150,11 +151,11 @@ class AuthResponse(BaseModel):
 
 
 # ==========================================
-# 🎓 STUDENT PORTAL SCHEMAS
+# 🎓 STUDENT PROFILE & DETAILS SCHEMAS
 # ==========================================
 
 class StudentProfileResponse(BaseModel):
-    """Complete student profile representation."""
+    """Complete student profile representation including college and parent records."""
     id: int
     full_name: str
     email: EmailStr
@@ -162,6 +163,18 @@ class StudentProfileResponse(BaseModel):
     department: str
     semester: int
     bio: Optional[str] = ""
+    college_name: Optional[str] = ""
+    usn: Optional[str] = ""
+    degree: Optional[str] = "B.Tech"
+    branch: Optional[str] = ""
+    graduation_year: Optional[int] = 2027
+    parent_name: Optional[str] = ""
+    parent_phone: Optional[str] = ""
+    parent_email: Optional[str] = ""
+    parent_relation: Optional[str] = "Parent"
+    course_id: Optional[int] = 1
+    course_code: Optional[str] = None
+    course_title: Optional[str] = None
     email_verified: bool
     phone_verified: bool
     approval_status: str
@@ -172,7 +185,7 @@ class StudentProfileResponse(BaseModel):
 
 
 class StudentProfileUpdate(BaseModel):
-    """Schema for student updating editable non-credential fields."""
+    """Minimal schema for updating basic editable non-credential fields."""
     full_name: str = Field(
         ...,
         min_length=2,
@@ -200,48 +213,142 @@ class StudentProfileUpdate(BaseModel):
         return v.strip() if isinstance(v, str) else v
 
 
-class AttendanceSubmit(BaseModel):
-    """Schema for a student claiming self-service attendance for a session."""
-    student_id: int = Field(
+class StudentDetailedProfileUpdate(BaseModel):
+    """Full comprehensive profile update payload: Academic, College, Parent, and Contact details."""
+    full_name: str = Field(
         ...,
-        gt=0,
-        description="Database primary ID of the attending student",
-        examples=[1],
+        min_length=2,
+        max_length=150,
+        description="Full legal name of the student",
+        examples=["Sateesh Ambesange"],
     )
-    session_id: int = Field(
+    department: str = Field(
         ...,
-        gt=0,
-        description="Target academic session primary ID",
-        examples=[1],
+        min_length=2,
+        max_length=100,
+        description="Department / School",
+        examples=["Computer Science"],
+    )
+    semester: int = Field(
+        default=1,
+        ge=1,
+        le=8,
+        description="Current semester",
+        examples=[8],
+    )
+    bio: Optional[str] = Field(
+        default="",
+        max_length=500,
+        examples=["Focusing on Edge AI, Kernel drivers, and distributed inference."],
     )
 
+    # College / Academic Details
+    college_name: str = Field(
+        ...,
+        min_length=2,
+        max_length=200,
+        description="College or University institution name",
+        examples=["National Institute of Technology Karnataka"],
+    )
+    usn: str = Field(
+        ...,
+        min_length=3,
+        max_length=50,
+        description="University Seat Number (USN) or Student Roll ID",
+        examples=["1NT20CS001"],
+    )
+    degree: str = Field(
+        default="B.Tech",
+        max_length=50,
+        description="Degree pursued (e.g. B.Tech, M.Tech, MCA)",
+        examples=["B.Tech"],
+    )
+    branch: str = Field(
+        ...,
+        min_length=2,
+        max_length=100,
+        description="Engineering branch or discipline",
+        examples=["Computer Science & Engineering"],
+    )
+    graduation_year: int = Field(
+        default=2027,
+        ge=2020,
+        le=2035,
+        description="Expected or actual year of graduation",
+        examples=[2027],
+    )
 
-class StudentAttendanceRecord(BaseModel):
-    """Schema for individual student attendance history timeline."""
+    # Parent / Guardian Details
+    parent_name: str = Field(
+        ...,
+        min_length=2,
+        max_length=150,
+        description="Parent or legal guardian name",
+        examples=["Ramesh Ambesange"],
+    )
+    parent_phone: str = Field(
+        ...,
+        pattern=r"^\+?[1-9]\d{7,14}$",
+        description="Parent or guardian contact phone number",
+        examples=["+919876543210"],
+    )
+    parent_email: Optional[EmailStr] = Field(
+        default=None,
+        description="Parent contact email",
+        examples=["parent.contact@gmail.com"],
+    )
+    parent_relation: str = Field(
+        default="Parent",
+        max_length=50,
+        description="Relationship to student (Father, Mother, Guardian)",
+        examples=["Father"],
+    )
+
+    @field_validator("full_name", "department", "college_name", "usn", "branch", "parent_name", mode="before")
+    @classmethod
+    def strip_required_strings(cls, v: str) -> str:
+        return v.strip() if isinstance(v, str) else v
+
+
+# ==========================================
+# 📚 COURSES & SESSIONS SCHEMAS
+# ==========================================
+
+class CourseSessionItem(BaseModel):
+    """Schema representing an academic session listed under an enrolled course."""
+    session_id: int
     topic: str
     session_date: str
     timing: str
     mode: str
-    status: str
+    meeting_link: str
+    description: Optional[str] = ""
+    attendance_status: str = "NOT_SUBMITTED"
     remarks: Optional[str] = ""
-    submitted_at: Optional[str] = None
 
 
-# ==========================================
-# 🛡️ ADMIN PORTAL SCHEMAS
-# ==========================================
+class CourseInfo(BaseModel):
+    """Course metadata schema."""
+    course_id: int
+    code: str
+    title: str
+    description: Optional[str] = ""
 
-class StudentApprovalAction(BaseModel):
-    """Schema for administrator deciding onboarding approval state."""
-    status: ApprovalStatusEnum = Field(
-        ...,
-        description="Decision outcome: APPROVED, REJECTED, or PENDING",
-        examples=[ApprovalStatusEnum.APPROVED],
-    )
+
+class EnrolledCourseResponse(BaseModel):
+    """Schema returning enrolled course metadata alongside all associated sessions."""
+    course: CourseInfo
+    sessions: List[CourseSessionItem]
 
 
 class SessionCreate(BaseModel):
     """Schema for scheduling and publishing a curriculum session or workshop."""
+    course_id: Optional[int] = Field(
+        default=1,
+        gt=0,
+        description="Target course ID the session belongs to",
+        examples=[1],
+    )
     topic: str = Field(
         ...,
         min_length=3,
@@ -290,6 +397,7 @@ class SessionCreate(BaseModel):
 class SessionResponse(BaseModel):
     """Schema for returning session metadata to the client."""
     id: int
+    course_id: Optional[int] = 1
     topic: str
     session_date: str
     timing: str
@@ -302,8 +410,51 @@ class SessionResponse(BaseModel):
         from_attributes = True
 
 
+# ==========================================
+# 📝 ATTENDANCE WORKFLOW SCHEMAS
+# ==========================================
+
+class AttendanceSubmit(BaseModel):
+    """Schema for legacy student self-service attendance submission."""
+    student_id: int = Field(..., gt=0, examples=[1])
+    session_id: int = Field(..., gt=0, examples=[1])
+
+
+class StudentAttendanceAction(BaseModel):
+    """Payload for student submitting Present or Absent claim."""
+    student_id: int = Field(
+        ...,
+        gt=0,
+        description="Database primary key ID of student",
+        examples=[1],
+    )
+    session_id: int = Field(
+        ...,
+        gt=0,
+        description="Database primary key ID of academic session",
+        examples=[1],
+    )
+    claim: str = Field(
+        ...,
+        pattern=r"^(PRESENT|ABSENT)$",
+        description="Self-reported claim: 'PRESENT' (sent for Admin approval) or 'ABSENT'",
+        examples=["PRESENT"],
+    )
+
+
+class StudentAttendanceRecord(BaseModel):
+    """Schema for individual student attendance history timeline."""
+    topic: str
+    session_date: str
+    timing: str
+    mode: str
+    status: str
+    remarks: Optional[str] = ""
+    submitted_at: Optional[str] = None
+
+
 class AttendanceReview(BaseModel):
-    """Schema for administrator marking or reviewing student attendance."""
+    """Schema for administrator verifying and finalizing student attendance."""
     status: AttendanceStatusEnum = Field(
         ...,
         description="Verification mark: PRESENT or ABSENT",
@@ -323,8 +474,17 @@ class AttendanceReview(BaseModel):
 
 
 # ==========================================
-# 📈 ANALYTICS & ROSTER SCHEMAS
+# 🛡️ ADMIN GOVERNANCE & ANALYTICS SCHEMAS
 # ==========================================
+
+class StudentApprovalAction(BaseModel):
+    """Schema for administrator deciding onboarding approval state."""
+    status: ApprovalStatusEnum = Field(
+        ...,
+        description="Decision outcome: APPROVED, REJECTED, or PENDING",
+        examples=[ApprovalStatusEnum.APPROVED],
+    )
+
 
 class SessionRosterItem(BaseModel):
     """Schema representing a student row in an instructor's session grading roster."""
