@@ -3,7 +3,8 @@
 Provides dual-engine compatibility for SQLite (local development) and
 PostgreSQL (Render managed database), including pooled connections, dynamic schema
 initialization, safe sequential column migrations, legacy column relaxation,
-password hashing support, and dynamic foreign key seed resolution.
+course-to-session relationships, expanded student academic/parent profiles,
+and dynamic foreign key seed resolution.
 """
 
 import os
@@ -197,7 +198,7 @@ def _ensure_column_exists(cursor: UnifiedCursor, table: str, column: str, col_ty
 
 
 def _relax_legacy_not_null_constraints(cursor: UnifiedCursor):
-    """Relaxes NOT NULL constraints on legacy columns (e.g. college_name, usn, branch)
+    """Relaxes NOT NULL constraints on legacy columns (e.g. usn, branch)
     in existing PostgreSQL instances so new modular inserts do not fail.
     """
     if not IS_POSTGRES:
@@ -234,6 +235,14 @@ def init_db() -> None:
         if IS_POSTGRES:
             table_statements = [
                 """
+                CREATE TABLE IF NOT EXISTS courses (
+                    id SERIAL PRIMARY KEY,
+                    code VARCHAR(50) UNIQUE NOT NULL,
+                    title VARCHAR(200) NOT NULL,
+                    description TEXT DEFAULT ''
+                );
+                """,
+                """
                 CREATE TABLE IF NOT EXISTS admins (
                     id SERIAL PRIMARY KEY,
                     username VARCHAR(100) UNIQUE NOT NULL,
@@ -253,6 +262,16 @@ def init_db() -> None:
                     department VARCHAR(100),
                     semester INT DEFAULT 1,
                     bio TEXT DEFAULT '',
+                    college_name VARCHAR(200) DEFAULT '',
+                    usn VARCHAR(50) DEFAULT '',
+                    degree VARCHAR(50) DEFAULT 'B.Tech',
+                    branch VARCHAR(100) DEFAULT '',
+                    graduation_year INT DEFAULT 2027,
+                    parent_name VARCHAR(150) DEFAULT '',
+                    parent_phone VARCHAR(50) DEFAULT '',
+                    parent_email VARCHAR(255) DEFAULT '',
+                    parent_relation VARCHAR(50) DEFAULT 'Parent',
+                    course_id INT DEFAULT 1,
                     password_hash VARCHAR(255) DEFAULT '',
                     phone_verified BOOLEAN DEFAULT FALSE,
                     email_verified BOOLEAN DEFAULT FALSE,
@@ -263,6 +282,7 @@ def init_db() -> None:
                 """
                 CREATE TABLE IF NOT EXISTS sessions (
                     id SERIAL PRIMARY KEY,
+                    course_id INT DEFAULT 1,
                     topic VARCHAR(255) NOT NULL,
                     session_date VARCHAR(50) NOT NULL,
                     timing VARCHAR(100) NOT NULL,
@@ -287,6 +307,14 @@ def init_db() -> None:
         else:
             table_statements = [
                 """
+                CREATE TABLE IF NOT EXISTS courses (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code TEXT UNIQUE NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT DEFAULT ''
+                );
+                """,
+                """
                 CREATE TABLE IF NOT EXISTS admins (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT UNIQUE NOT NULL,
@@ -306,6 +334,16 @@ def init_db() -> None:
                     department TEXT,
                     semester INTEGER DEFAULT 1,
                     bio TEXT DEFAULT '',
+                    college_name TEXT DEFAULT '',
+                    usn TEXT DEFAULT '',
+                    degree TEXT DEFAULT 'B.Tech',
+                    branch TEXT DEFAULT '',
+                    graduation_year INTEGER DEFAULT 2027,
+                    parent_name TEXT DEFAULT '',
+                    parent_phone TEXT DEFAULT '',
+                    parent_email TEXT DEFAULT '',
+                    parent_relation TEXT DEFAULT 'Parent',
+                    course_id INTEGER DEFAULT 1,
                     password_hash TEXT DEFAULT '',
                     phone_verified BOOLEAN DEFAULT 0,
                     email_verified BOOLEAN DEFAULT 0,
@@ -316,6 +354,7 @@ def init_db() -> None:
                 """
                 CREATE TABLE IF NOT EXISTS sessions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    course_id INTEGER DEFAULT 1,
                     topic TEXT NOT NULL,
                     session_date TEXT NOT NULL,
                     timing TEXT NOT NULL,
@@ -352,6 +391,24 @@ def init_db() -> None:
         _ensure_column_exists(cursor, "students", "semester", "INT DEFAULT 1")
         _ensure_column_exists(cursor, "students", "bio", "TEXT DEFAULT ''")
         _ensure_column_exists(cursor, "students", "password_hash", "VARCHAR(255) DEFAULT ''")
+
+        # College / Academic Details Migration
+        _ensure_column_exists(cursor, "students", "college_name", "VARCHAR(200) DEFAULT ''")
+        _ensure_column_exists(cursor, "students", "usn", "VARCHAR(50) DEFAULT ''")
+        _ensure_column_exists(cursor, "students", "degree", "VARCHAR(50) DEFAULT 'B.Tech'")
+        _ensure_column_exists(cursor, "students", "branch", "VARCHAR(100) DEFAULT ''")
+        _ensure_column_exists(cursor, "students", "graduation_year", "INT DEFAULT 2027")
+
+        # Parent / Guardian Details Migration
+        _ensure_column_exists(cursor, "students", "parent_name", "VARCHAR(150) DEFAULT ''")
+        _ensure_column_exists(cursor, "students", "parent_phone", "VARCHAR(50) DEFAULT ''")
+        _ensure_column_exists(cursor, "students", "parent_email", "VARCHAR(255) DEFAULT ''")
+        _ensure_column_exists(cursor, "students", "parent_relation", "VARCHAR(50) DEFAULT 'Parent'")
+
+        # Course Relational Linkage
+        _ensure_column_exists(cursor, "students", "course_id", "INT DEFAULT 1")
+        _ensure_column_exists(cursor, "sessions", "course_id", "INT DEFAULT 1")
+
         bool_type = "BOOLEAN DEFAULT FALSE" if IS_POSTGRES else "BOOLEAN DEFAULT 0"
         _ensure_column_exists(cursor, "students", "phone_verified", bool_type)
         _ensure_column_exists(cursor, "students", "email_verified", bool_type)
@@ -389,6 +446,8 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_students_phone ON students(phone);",
             "CREATE INDEX IF NOT EXISTS idx_students_dept ON students(department);",
             "CREATE INDEX IF NOT EXISTS idx_students_approval ON students(approval_status);",
+            "CREATE INDEX IF NOT EXISTS idx_students_course ON students(course_id);",
+            "CREATE INDEX IF NOT EXISTS idx_sessions_course ON sessions(course_id);",
             "CREATE INDEX IF NOT EXISTS idx_attendance_session ON attendance(session_id);",
             "CREATE INDEX IF NOT EXISTS idx_attendance_student ON attendance(student_id);"
         ]
@@ -396,7 +455,21 @@ def init_db() -> None:
             cursor.execute(idx.strip())
 
         # ---------------------------------------------------------
-        # PHASE 4: Default Admin Seeding
+        # PHASE 4: Seed Flagship Course
+        # ---------------------------------------------------------
+        cursor.execute("SELECT COUNT(*) AS count FROM courses;")
+        c_row = cursor.fetchone()
+        c_count = c_row.get("count", 0) if c_row else 0
+
+        if c_count == 0:
+            cursor.execute("""
+                INSERT INTO courses (id, code, title, description)
+                VALUES (1, 'SUPER30-AI', 'PragyanAI Super30 Deep-Tech & Agentic AI Fellowship', 'Mastery in LLMs, LangGraph, Edge AI, and RTL Hardware Acceleration.')
+                ON CONFLICT (id) DO NOTHING;
+            """)
+
+        # ---------------------------------------------------------
+        # PHASE 5: Default Admin Seeding
         # ---------------------------------------------------------
         cursor.execute("SELECT COUNT(*) AS count FROM admins;")
         admin_count_row = cursor.fetchone()
@@ -410,7 +483,7 @@ def init_db() -> None:
             """, ("admin", "admin@pragyanai.com", default_admin_hash))
 
         # ---------------------------------------------------------
-        # PHASE 5: Automated Seed Data (Dynamic Foreign Key Resolution)
+        # PHASE 6: Automated Seed Data (Dynamic Foreign Key Resolution)
         # ---------------------------------------------------------
         cursor.execute("SELECT COUNT(*) as count FROM students;")
         st_count_row = cursor.fetchone()
@@ -427,6 +500,16 @@ def init_db() -> None:
                     "Computer Science",
                     8,
                     "AI Systems Architect & Founder focusing on Agentic AI, EDA, and Kernel Drivers.",
+                    "National Institute of Technology Karnataka",
+                    "1NT20CS001",
+                    "B.Tech",
+                    "Computer Science & Engineering",
+                    2026,
+                    "Ramesh Ambesange",
+                    "+919876543201",
+                    "parent.sateesh@pragyanai.com",
+                    "Father",
+                    1,
                     std_pw,
                     True,
                     True,
@@ -440,6 +523,16 @@ def init_db() -> None:
                     "Artificial Intelligence",
                     6,
                     "Specializing in small language models, quantization, and ONNX Runtime execution.",
+                    "BMS College of Engineering",
+                    "1BM21AI045",
+                    "B.Tech",
+                    "Artificial Intelligence & Machine Learning",
+                    2027,
+                    "Suresh Kumar",
+                    "+919876543202",
+                    "parent.rohan@gmail.com",
+                    "Father",
+                    1,
                     std_pw,
                     True,
                     True,
@@ -453,6 +546,16 @@ def init_db() -> None:
                     "Electronics",
                     6,
                     "Embedded Linux engineer researching real-time kernel optimizations and Yocto.",
+                    "RV College of Engineering",
+                    "1RV21EC089",
+                    "B.Tech",
+                    "Electronics & Communication",
+                    2027,
+                    "Sunita Sharma",
+                    "+919876543203",
+                    "parent.priya@gmail.com",
+                    "Mother",
+                    1,
                     std_pw,
                     True,
                     False,
@@ -466,6 +569,16 @@ def init_db() -> None:
                     "Information Tech",
                     4,
                     "Student focusing on distributed databases, vector indexes, and microservices.",
+                    "PES University",
+                    "PES1UG22CS102",
+                    "B.Tech",
+                    "Information Science",
+                    2028,
+                    "Mahesh Patel",
+                    "+919876543204",
+                    "parent.ananya@gmail.com",
+                    "Father",
+                    1,
                     std_pw,
                     False,
                     False,
@@ -475,8 +588,10 @@ def init_db() -> None:
             cursor.executemany("""
                 INSERT INTO students (
                     full_name, name, email, phone, department, semester, bio,
-                    password_hash, phone_verified, email_verified, approval_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    college_name, usn, degree, branch, graduation_year,
+                    parent_name, parent_phone, parent_email, parent_relation,
+                    course_id, password_hash, phone_verified, email_verified, approval_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """, sample_students)
 
         # Check sessions table
@@ -487,6 +602,7 @@ def init_db() -> None:
         if sess_count == 0:
             sample_sessions = [
                 (
+                    1,
                     "Agentic AI Architecture & Multi-Agent LangGraph Systems",
                     "2026-10-01",
                     "10:00 AM - 12:30 PM",
@@ -495,6 +611,7 @@ def init_db() -> None:
                     "Architecture patterns for cyclic graphs, persistent state checkpoints, human-in-the-loop workflows, and dynamic tool orchestration."
                 ),
                 (
+                    1,
                     "Linux Kernel Drivers & Edge AI Acceleration",
                     "2026-10-04",
                     "02:00 PM - 04:30 PM",
@@ -505,8 +622,8 @@ def init_db() -> None:
             ]
             cursor.executemany("""
                 INSERT INTO sessions (
-                    topic, session_date, timing, mode, meeting_link, description
-                ) VALUES (?, ?, ?, ?, ?, ?);
+                    course_id, topic, session_date, timing, mode, meeting_link, description
+                ) VALUES (?, ?, ?, ?, ?, ?, ?);
             """, sample_sessions)
 
         # Check attendance table and seed using ACTUAL queried IDs
@@ -521,7 +638,6 @@ def init_db() -> None:
             cursor.execute("SELECT id FROM students WHERE approval_status = 'APPROVED' ORDER BY id ASC LIMIT 2;")
             available_students = [r["id"] for r in cursor.fetchall()]
 
-            # Fall back to any student if none are explicitly marked APPROVED yet
             if not available_students:
                 cursor.execute("SELECT id FROM students ORDER BY id ASC LIMIT 2;")
                 available_students = [r["id"] for r in cursor.fetchall()]
@@ -530,7 +646,7 @@ def init_db() -> None:
                 sample_attendance = []
                 s_id = available_sessions[0]
                 
-                # First student marked PRESENT
+                # First student marked PRESENT (approved)
                 sample_attendance.append((
                     s_id, 
                     available_students[0], 
@@ -538,13 +654,13 @@ def init_db() -> None:
                     "Active participant during live Q&A and code walkthrough."
                 ))
                 
-                # Second student (if available) marked SUBMITTED
+                # Second student (if available) marked SUBMITTED (pending review)
                 if len(available_students) > 1:
                     sample_attendance.append((
                         s_id, 
                         available_students[1], 
                         "SUBMITTED", 
-                        "Submitted via student portal; verification pending."
+                        "Student claimed PRESENT (Pending Admin Approval)"
                     ))
 
                 if IS_POSTGRES:
