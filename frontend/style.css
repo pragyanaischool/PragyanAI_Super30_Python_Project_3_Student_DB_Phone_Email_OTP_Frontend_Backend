@@ -28,14 +28,84 @@ body {
   min-height: 100vh;
 }
 
+/* ---------------------------------------------------------
+   1. Clean Landing & Authentication Wrapper
+   --------------------------------------------------------- */
+.auth-wrapper {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  background: radial-gradient(circle at 50% 20%, #1e293b 0%, #0b0f19 100%);
+  padding: 24px;
+}
+
+.auth-container {
+  width: 100%;
+  max-width: 480px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 32px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+  animation: fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.auth-brand {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.auth-brand h2 {
+  font-size: 24px;
+  letter-spacing: -0.5px;
+  color: #fff;
+  margin-bottom: 4px;
+}
+
+.auth-tabs {
+  display: flex;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  margin-bottom: 24px;
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 9px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: center;
+}
+
+.tab-btn.active {
+  background: var(--primary);
+  color: #ffffff;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.auth-box-form h3 {
+  font-size: 18px;
+  margin-bottom: 4px;
+  color: var(--text-main);
+}
+
+/* ---------------------------------------------------------
+   2. Main Layout & Sidebar
+   --------------------------------------------------------- */
 .layout {
   display: flex;
   min-height: 100vh;
 }
 
-/* ---------------------------------------------------------
-   Sidebar Styles
-   --------------------------------------------------------- */
 .sidebar {
   width: 260px;
   background-color: var(--bg-sidebar);
@@ -65,6 +135,32 @@ body {
   border-radius: 6px;
   font-weight: 700;
   border: 1px solid rgba(59, 130, 246, 0.3);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.badge-info {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.3);
+}
+
+.badge-success {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--success);
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
+.badge-warning {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--warning);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.badge-danger {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--danger);
+  border-color: rgba(239, 68, 68, 0.3);
 }
 
 .nav-links {
@@ -85,6 +181,7 @@ body {
   font-size: 14px;
   font-weight: 500;
   transition: background 0.2s ease, color 0.2s ease;
+  width: 100%;
 }
 
 .nav-btn.active, .nav-btn:hover {
@@ -110,20 +207,25 @@ body {
   justify-content: center;
   font-weight: 700;
   font-size: 13px;
+  flex-shrink: 0;
 }
 
 .user-name {
   font-size: 14px;
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .user-role {
   font-size: 12px;
   color: var(--text-muted);
+  text-transform: capitalize;
 }
 
 /* ---------------------------------------------------------
-   Content Area & Headers
+   3. Content Area & Cards
    --------------------------------------------------------- */
 .content {
   flex: 1;
@@ -136,6 +238,8 @@ body {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 24px;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 .topbar h1 {
@@ -153,7 +257,7 @@ body {
   display: none;
 }
 
-.tab-pane.active {
+.tab-pane:not(.hidden), .tab-pane.active {
   display: block;
 }
 
@@ -161,11 +265,11 @@ body {
   background: var(--bg-card);
   border-radius: 12px;
   border: 1px solid var(--border);
-  padding: 20px;
+  padding: 24px;
 }
 
 /* ---------------------------------------------------------
-   KPI Metric Cards
+   4. KPI Grid & Visualizations
    --------------------------------------------------------- */
 .kpi-grid {
   display: grid;
@@ -192,9 +296,6 @@ body {
 .text-blue { color: var(--primary); }
 .text-center { text-align: center; }
 
-/* ---------------------------------------------------------
-   Visual Analytics & Charts
-   --------------------------------------------------------- */
 .charts-grid {
   display: grid;
   grid-template-columns: 2fr 1.2fr;
@@ -219,7 +320,7 @@ body {
 }
 
 /* ---------------------------------------------------------
-   Directory Table & Roster Sections
+   5. Tables & Rosters
    --------------------------------------------------------- */
 .table-header {
   display: flex;
@@ -286,7 +387,7 @@ tr:hover {
 }
 
 /* ---------------------------------------------------------
-   Status Badges & Pill Indicators
+   6. Tags & Pill Indicators
    --------------------------------------------------------- */
 .tag {
   display: inline-block;
@@ -316,22 +417,8 @@ tr:hover {
   border: 1px solid rgba(245, 158, 11, 0.3);
 }
 
-.pagination {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 16px;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
-.pagination-buttons {
-  display: flex;
-  gap: 8px;
-}
-
 /* ---------------------------------------------------------
-   Button UI Components
+   7. Buttons
    --------------------------------------------------------- */
 .btn {
   padding: 8px 16px;
@@ -399,13 +486,8 @@ tr:hover {
 }
 
 /* ---------------------------------------------------------
-   Form Layouts & Inputs
+   8. Form Grid Layouts
    --------------------------------------------------------- */
-.student-form-container {
-  max-width: 620px;
-  margin: 0 auto;
-}
-
 .form-group {
   margin-bottom: 16px;
 }
@@ -437,14 +519,10 @@ tr:hover {
 }
 
 /* ---------------------------------------------------------
-   Enhanced 2-Step OTP Verification Section
+   9. OTP Drawer & Inspector
    --------------------------------------------------------- */
 .otp-box {
   margin-top: 20px;
-}
-
-.otp-header {
-  margin-bottom: 12px;
 }
 
 .otp-input-row {
@@ -476,13 +554,6 @@ tr:hover {
   color: var(--text-main);
 }
 
-.channel-target-info {
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-bottom: 10px;
-  font-family: monospace;
-}
-
 .btn-resend {
   background: transparent;
   color: #38bdf8;
@@ -498,13 +569,6 @@ tr:hover {
 .btn-resend:hover:not(:disabled) {
   background: #38bdf8;
   color: #0b0f19;
-}
-
-.btn-resend:disabled {
-  color: #64748b;
-  border-color: #334155;
-  cursor: not-allowed;
-  opacity: 0.6;
 }
 
 .input-inline {
@@ -528,13 +592,10 @@ tr:hover {
   min-height: 16px;
 }
 
-/* ---------------------------------------------------------
-   Developer & Diagnostic Inspector Accordion
-   --------------------------------------------------------- */
 .debug-inspector-box {
-  margin-top: 20px;
+  margin-top: 16px;
   border-top: 1px dashed var(--border);
-  padding-top: 14px;
+  padding-top: 12px;
 }
 
 .debug-inspector-content {
@@ -545,13 +606,8 @@ tr:hover {
   color: var(--text-muted);
 }
 
-#debugCodesContainer {
-  margin-top: 10px;
-  transition: all 0.3s ease;
-}
-
 /* ---------------------------------------------------------
-   Notifications & Feedback
+   10. Notifications & Modals
    --------------------------------------------------------- */
 .notify {
   margin-top: 16px;
@@ -564,15 +620,6 @@ tr:hover {
   animation: fadeIn 0.2s ease-in-out;
 }
 
-.feedback-msg {
-  font-size: 12px;
-  margin-top: 6px;
-}
-
-.text-success { color: var(--success) !important; }
-.text-danger { color: var(--danger) !important; }
-.text-info { color: #38bdf8 !important; }
-
 .hidden {
   display: none !important;
 }
@@ -583,12 +630,11 @@ tr:hover {
 }
 
 /* ---------------------------------------------------------
-   Responsive Breakpoints
+   11. Responsive Breakpoints
    --------------------------------------------------------- */
 @media (max-width: 900px) {
   .layout { flex-direction: column; }
   .sidebar { width: 100%; border-right: none; border-bottom: 1px solid var(--border); }
   .charts-grid { grid-template-columns: 1fr; }
   .form-row, .otp-input-row { grid-template-columns: 1fr; }
-  .debug-inspector-content { flex-direction: column; gap: 8px; align-items: flex-start; }
 }
