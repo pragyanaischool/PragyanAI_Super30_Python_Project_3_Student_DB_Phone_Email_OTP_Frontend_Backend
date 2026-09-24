@@ -1,37 +1,51 @@
 """Student Portal Endpoints.
 
-Handles student profile management, browsing scheduled curriculum sessions,
-session detail retrieval, self-service attendance submission, and personal attendance history.
+Handles comprehensive student profile management (personal, college, and parent details),
+browsing enrolled course curriculum sessions, self-service attendance claims
+(PRESENT requires admin approval; ABSENT is directly logged), and attendance history.
 """
 
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, status
 from backend.database import get_db
 from backend.models.academic_models import (
+    StudentProfileResponse,
     StudentProfileUpdate,
+    StudentDetailedProfileUpdate,
+    StudentAttendanceAction,
     AttendanceSubmit,
     StudentAttendanceRecord,
-    SessionCreate,
+    EnrolledCourseResponse,
+    CourseSessionItem,
+    CourseInfo,
 )
 
 router = APIRouter(prefix="/api/student", tags=["Student Portal"])
 
 
+# ==========================================
+# 🎓 1. STUDENT PROFILE MANAGEMENT
+# ==========================================
+
 @router.get(
     "/profile/{student_id}",
-    summary="Get Student Profile",
-    response_description="Returns student profile details",
+    summary="Get Detailed Student Profile",
+    response_description="Returns complete student profile with college, parent, and course data",
 )
 def get_student_profile(student_id: int):
-    """Retrieve full profile details for a given student ID."""
+    """Retrieve complete profile details for a given student ID."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT id, full_name, email, phone, department, semester, bio, 
-                   email_verified, phone_verified, approval_status, created_at
-            FROM students 
-            WHERE id = ?;
+            SELECT s.id, s.full_name, s.email, s.phone, s.department, s.semester, s.bio,
+                   s.college_name, s.usn, s.degree, s.branch, s.graduation_year,
+                   s.parent_name, s.parent_phone, s.parent_email, s.parent_relation,
+                   s.course_id, c.code AS course_code, c.title AS course_title,
+                   s.email_verified, s.phone_verified, s.approval_status, s.created_at
+            FROM students s
+            LEFT JOIN courses c ON s.course_id = c.id
+            WHERE s.id = ?;
             """,
             (student_id,),
         )
@@ -46,27 +60,49 @@ def get_student_profile(student_id: int):
 
 @router.put(
     "/profile/{student_id}",
-    summary="Update Student Profile",
-    response_description="Updates editable profile attributes",
+    summary="Update Detailed Student Profile",
+    response_description="Updates personal, college, and parent details",
 )
-def update_student_profile(student_id: int, payload: StudentProfileUpdate):
-    """Update editable student details (full name, department, bio).
+def update_detailed_profile(student_id: int, payload: StudentDetailedProfileUpdate):
+    """Update student profile with comprehensive academic, college, and parent details.
 
-    Sensitive verification flags and contact identifiers (email, phone)
-    remain immutable via this endpoint to preserve authentication integrity.
+    Sensitive contact verification flags (email_verified, phone_verified) and
+    primary login identifiers remain immutable via this endpoint.
     """
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
-            UPDATE students 
-            SET full_name = ?, department = ?, bio = ?
+            UPDATE students SET
+                full_name = ?,
+                department = ?,
+                semester = ?,
+                bio = ?,
+                college_name = ?,
+                usn = ?,
+                degree = ?,
+                branch = ?,
+                graduation_year = ?,
+                parent_name = ?,
+                parent_phone = ?,
+                parent_email = ?,
+                parent_relation = ?
             WHERE id = ?;
             """,
             (
                 payload.full_name.strip(),
                 payload.department.strip(),
+                payload.semester,
                 payload.bio.strip() if payload.bio else "",
+                payload.college_name.strip(),
+                payload.usn.strip(),
+                payload.degree.strip(),
+                payload.branch.strip(),
+                payload.graduation_year,
+                payload.parent_name.strip(),
+                payload.parent_phone.strip(),
+                str(payload.parent_email).strip().lower() if payload.parent_email else "",
+                payload.parent_relation.strip(),
                 student_id,
             ),
         )
@@ -76,21 +112,79 @@ def update_student_profile(student_id: int, payload: StudentProfileUpdate):
                 detail=f"Student record with ID {student_id} was not found.",
             )
 
-    return {"status": "success", "message": "Profile updated successfully."}
+    return {"status": "success", "message": "Profile, college, and parent details updated successfully."}
+
+
+# ==========================================
+# 📚 2. ENROLLED COURSE & SESSIONS
+# ==========================================
+
+@router.get(
+    "/enrolled-course/{student_id}",
+    summary="Get Enrolled Course and Curriculum Sessions",
+    response_description="Returns enrolled course details and associated session schedule",
+)
+def get_enrolled_course_and_sessions(student_id: int):
+    """Fetch the student's enrolled course and only curriculum sessions linked to that course."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        # Retrieve student course linkage
+        cursor.execute(
+            """
+            SELECT s.course_id, c.code, c.title, c.description
+            FROM students s
+            JOIN courses c ON s.course_id = c.id
+            WHERE s.id = ?;
+            """,
+            (student_id,),
+        )
+        course_row = cursor.fetchone()
+        if not course_row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Student #{student_id} is not currently enrolled in a valid course.",
+            )
+
+        # Retrieve all sessions for this specific course alongside student attendance status
+        cursor.execute(
+            """
+            SELECT sess.id AS session_id,
+                   sess.topic,
+                   sess.session_date,
+                   sess.timing,
+                   sess.mode,
+                   sess.meeting_link,
+                   sess.description,
+                   COALESCE(att.status, 'NOT_SUBMITTED') AS attendance_status,
+                   COALESCE(att.remarks, '') AS remarks
+            FROM sessions sess
+            LEFT JOIN attendance att ON sess.id = att.session_id AND att.student_id = ?
+            WHERE sess.course_id = ?
+            ORDER BY sess.session_date ASC, sess.id ASC;
+            """,
+            (student_id, course_row["course_id"]),
+        )
+        sessions = [dict(r) for r in cursor.fetchall()]
+
+    return {
+        "course": dict(course_row),
+        "sessions": sessions,
+    }
 
 
 @router.get(
     "/sessions",
-    summary="List Scheduled Sessions",
-    response_description="List of all published academic and training sessions",
+    summary="List All Published Sessions",
+    response_description="List of all published academic curriculum sessions across courses",
 )
 def list_available_sessions():
-    """Retrieve all scheduled academic sessions ordered chronologically."""
+    """Retrieve all scheduled academic curriculum sessions ordered chronologically."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT id, topic, session_date, timing, mode, meeting_link, description, created_at
+            SELECT id, course_id, topic, session_date, timing, mode, meeting_link, description, created_at
             FROM sessions 
             ORDER BY session_date ASC, id ASC;
             """
@@ -109,7 +203,7 @@ def get_session_detail(session_id: int):
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT id, topic, session_date, timing, mode, meeting_link, description, created_at
+            SELECT id, course_id, topic, session_date, timing, mode, meeting_link, description, created_at
             FROM sessions 
             WHERE id = ?;
             """,
@@ -124,22 +218,27 @@ def get_session_detail(session_id: int):
         return dict(session)
 
 
+# ==========================================
+# 📝 3. ATTENDANCE SUBMISSION (PRESENT / ABSENT)
+# ==========================================
+
 @router.post(
-    "/attendance/submit",
-    summary="Submit Session Attendance",
+    "/attendance/mark",
+    summary="Submit Present or Absent Attendance Claim",
     status_code=status.HTTP_200_OK,
 )
-def submit_session_attendance(payload: AttendanceSubmit):
-    """Self-submit attendance for an active session.
+def mark_session_attendance(payload: StudentAttendanceAction):
+    """Submit attendance claim for a curriculum session.
 
-    Logs the student's submission as 'SUBMITTED' pending admin review.
-    Guards against altering an attendance record that has already been verified
-    by an instructor as PRESENT or ABSENT.
+    - Claiming 'PRESENT': Marked as 'SUBMITTED' (pending admin/instructor approval).
+    - Claiming 'ABSENT': Directly marked as 'ABSENT'.
+    - Locked if instructor has already approved as 'PRESENT'.
+    - Account must be 'APPROVED' by admin prior to marking attendance.
     """
     with get_db() as conn:
         cursor = conn.cursor()
 
-        # 1. Validate student existence and onboarding approval
+        # 1. Validate student existence and onboarding approval state
         cursor.execute(
             "SELECT approval_status FROM students WHERE id = ?;",
             (payload.student_id,),
@@ -153,7 +252,7 @@ def submit_session_attendance(payload: AttendanceSubmit):
         if student["approval_status"] != "APPROVED":
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Attendance recording locked. Account onboarding status is '{student['approval_status']}'. Must be 'APPROVED'.",
+                detail=f"Attendance locked. Onboarding status is '{student['approval_status']}'. Must be 'APPROVED'.",
             )
 
         # 2. Validate session existence
@@ -174,31 +273,59 @@ def submit_session_attendance(payload: AttendanceSubmit):
         )
         existing_att = cursor.fetchone()
 
-        if existing_att and existing_att["status"] in ("PRESENT", "ABSENT"):
+        if existing_att and existing_att["status"] == "PRESENT":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Attendance already finalized as '{existing_att['status']}' by the instructor.",
+                detail="Attendance already finalized and approved as 'PRESENT' by the instructor.",
             )
 
-        # 4. Upsert attendance record
+        # 4. Map workflow: PRESENT -> SUBMITTED (pending review), ABSENT -> ABSENT
+        assigned_status = "SUBMITTED" if payload.claim == "PRESENT" else "ABSENT"
+        remark = (
+            "Student claimed PRESENT (Pending Admin Approval)"
+            if payload.claim == "PRESENT"
+            else "Self-reported ABSENT"
+        )
+
         cursor.execute(
             """
             INSERT INTO attendance (session_id, student_id, status, remarks)
-            VALUES (?, ?, 'SUBMITTED', 'Self-submitted via student dashboard')
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(session_id, student_id) DO UPDATE SET
-                status = 'SUBMITTED',
-                remarks = 'Self-submitted via student dashboard',
+                status = excluded.status,
+                remarks = excluded.remarks,
                 submitted_at = CURRENT_TIMESTAMP;
             """,
-            (payload.session_id, payload.student_id),
+            (payload.session_id, payload.student_id, assigned_status, remark),
         )
 
     return {
         "status": "success",
-        "message": "Attendance recorded successfully. Pending instructor approval.",
+        "attendance_status": assigned_status,
+        "message": (
+            "Claimed PRESENT. Pending Admin Approval."
+            if payload.claim == "PRESENT"
+            else "Marked as ABSENT."
+        ),
         "student_id": payload.student_id,
         "session_id": payload.session_id,
     }
+
+
+@router.post(
+    "/attendance/submit",
+    summary="Legacy Self-Service Attendance Submission",
+    status_code=status.HTTP_200_OK,
+)
+def submit_session_attendance(payload: AttendanceSubmit):
+    """Legacy endpoint: sets attendance to 'SUBMITTED' pending admin review."""
+    return mark_session_attendance(
+        StudentAttendanceAction(
+            student_id=payload.student_id,
+            session_id=payload.session_id,
+            claim="PRESENT",
+        )
+    )
 
 
 @router.get(
@@ -207,7 +334,7 @@ def submit_session_attendance(payload: AttendanceSubmit):
     response_model=List[StudentAttendanceRecord],
 )
 def get_student_attendance_history(student_id: int):
-    """Fetch complete academic curriculum sessions and student verification statuses."""
+    """Fetch complete academic curriculum sessions and personal verification statuses."""
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute(
