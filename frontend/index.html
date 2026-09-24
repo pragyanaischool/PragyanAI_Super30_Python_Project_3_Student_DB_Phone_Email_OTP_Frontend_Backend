@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>EduPortal - Student DB & Verification System</title>
+  <title>PragyanAI Super30 - Academic Governance & Verification Portal</title>
   <link rel="stylesheet" href="style.css">
   <!-- Chart.js CDN for Analytics -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
@@ -22,12 +22,15 @@
         <button class="nav-btn" id="btn-student-tab" onclick="switchTab('student-tab')">🎓 Student Portal</button>
         <button class="nav-btn" id="btn-register-tab" onclick="switchTab('register-tab')">📝 Register & Verify</button>
       </nav>
-      <div class="user-profile">
-        <div class="avatar">AD</div>
-        <div>
-          <p class="user-name">Administrator</p>
-          <span class="user-role">Superadmin</span>
+
+      <!-- Dynamic Auth User Profile or Login Trigger -->
+      <div class="user-profile" id="sidebar-auth-section">
+        <div class="avatar" id="sidebar-avatar">--</div>
+        <div style="flex: 1; overflow: hidden;">
+          <p class="user-name" id="sidebar-username">Guest</p>
+          <span class="user-role" id="sidebar-role">Not Authenticated</span>
         </div>
+        <button id="sidebar-auth-btn" class="btn-sm btn-outline" onclick="openAuthModal('student-login')">Sign In</button>
       </div>
     </aside>
 
@@ -287,91 +290,160 @@
       </section>
 
       <!-- ======================================================== -->
-      <!-- TAB 3: STUDENT PORTAL (PROFILE, SESSIONS, ATTENDANCE)    -->
+      <!-- TAB 3: STUDENT PORTAL (COURSE SESSIONS & DETAILED PROFILE)-->
       <!-- ======================================================== -->
       <section id="student-tab" class="tab-pane hidden">
         <header class="topbar">
           <div>
             <h1>Student Academic Portal</h1>
-            <p class="subtext">Manage your profile, view scheduled lectures, and record your session attendance</p>
+            <p class="subtext">View enrolled course sessions, submit attendance, and maintain profile details</p>
           </div>
           <div style="display: flex; align-items: center; gap: 8px;">
             <label for="stu-id-input" style="font-size: 12px; color: #94a3b8;">Active Student ID:</label>
             <input type="number" id="stu-id-input" value="1" style="width: 70px; padding: 6px; border-radius: 6px; text-align: center;">
-            <button class="btn btn-secondary btn-sm" onclick="loadStudentProfile()">Load</button>
+            <button class="btn btn-secondary btn-sm" onclick="loadStudentDashboardData()">Load</button>
           </div>
         </header>
 
-        <!-- Profile Management Card -->
+        <!-- Course Curriculum & Attendance Submission Card -->
         <div class="card" style="margin-bottom: 24px;">
-          <h3>👤 Profile Management</h3>
-          <p class="subtext" style="margin-bottom: 16px;">Update your academic details (verified email and phone remain protected)</p>
-
-          <div class="form-row">
-            <div class="form-group">
-              <label for="stu-name">Full Name</label>
-              <input type="text" id="stu-name" placeholder="Full name">
+          <div class="table-header" style="border-bottom: 1px solid #222f49; padding-bottom: 12px; margin-bottom: 16px;">
+            <div>
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <h3 id="course-title-display" style="margin: 0;">Enrolled Course</h3>
+                <span id="course-code-badge" class="badge badge-info">...</span>
+              </div>
+              <p id="course-desc-display" class="subtext" style="margin-top: 4px;"></p>
             </div>
-            <div class="form-group">
-              <label for="stu-dept">Department</label>
-              <input type="text" id="stu-dept" placeholder="Academic department">
-            </div>
+            <button class="btn btn-secondary btn-sm" onclick="loadStudentEnrolledCourse()">🔄 Refresh Curriculum</button>
           </div>
 
-          <div class="form-row">
-            <div class="form-group">
-              <label for="stu-email">Verified Email (Read-Only)</label>
-              <input type="text" id="stu-email" disabled style="opacity: 0.6; cursor: not-allowed;">
-            </div>
-            <div class="form-group">
-              <label for="stu-approval">Onboarding Approval Status</label>
-              <input type="text" id="stu-approval" disabled style="font-weight: 600; opacity: 0.8; cursor: not-allowed;">
-            </div>
-          </div>
+          <h4>Scheduled Curriculum Sessions</h4>
+          <p class="subtext" style="margin-bottom: 14px;">Mark your attendance for each session. Submitting <strong>Present</strong> routes to Admin approval.</p>
 
-          <div class="form-group">
-            <label for="stu-bio">Bio / Specialization Focus</label>
-            <textarea id="stu-bio" rows="2" placeholder="Research focus or project areas..."></textarea>
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date & Time</th>
+                  <th>Session Topic</th>
+                  <th>Mode / Venue</th>
+                  <th>Attendance Status</th>
+                  <th style="text-align: right;">Submit Attendance</th>
+                </tr>
+              </thead>
+              <tbody id="student-course-sessions-body">
+                <tr><td colspan="5" class="text-center">Loading course curriculum sessions...</td></tr>
+              </tbody>
+            </table>
           </div>
-
-          <button type="button" class="btn btn-primary" onclick="saveStudentProfile()">💾 Save Profile</button>
         </div>
 
-        <!-- Scheduled Sessions & Attendance Submission -->
+        <!-- Comprehensive Student Profile Management Card -->
         <div class="card" style="margin-bottom: 24px;">
           <div class="table-header" style="margin-bottom: 12px;">
             <div>
-              <h3>📅 Browse Sessions & Fill Attendance</h3>
-              <p class="subtext">Select an active session to inspect details and self-submit attendance</p>
+              <h3>👤 Academic & College Profile</h3>
+              <p class="subtext">Maintain your institutional records, seat number, and stream details</p>
             </div>
-            <button class="btn btn-secondary btn-sm" onclick="loadStudentSessions()">🔄 Refresh Sessions</button>
+            <span id="stu-approval-badge" class="tag">Status: Unknown</span>
           </div>
 
-          <div class="form-group">
-            <label for="session-select">Select Academic Session</label>
-            <select id="session-select" onchange="displayStudentSessionDetails()"></select>
-          </div>
-
-          <!-- Dynamic Session Overview Card -->
-          <div id="session-details-card" class="card hidden" style="background: #151d30; border: 1px solid #222f49; margin-bottom: 16px;">
-            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
-              <h4 id="sess-card-topic" style="color: #f8fafc; font-size: 15px; margin: 0;"></h4>
-              <span id="sess-card-mode" class="tag ok"></span>
+          <form id="studentDetailedProfileForm" onsubmit="saveStudentDetailedProfile(event)">
+            <!-- Personal Basic Details -->
+            <div class="form-row">
+              <div class="form-group">
+                <label for="prof-fullname">Full Legal Name</label>
+                <input type="text" id="prof-fullname" required placeholder="Full Name">
+              </div>
+              <div class="form-group">
+                <label for="prof-usn">University Seat Number (USN / Roll No)</label>
+                <input type="text" id="prof-usn" required placeholder="e.g. 1NT20CS001">
+              </div>
             </div>
-            <p id="sess-card-desc" style="color: #94a3b8; font-size: 13px; margin-bottom: 12px;"></p>
-            <div style="font-size: 12px; color: #cbd5e1; border-top: 1px solid #222f49; padding-top: 8px;">
-              <div style="margin-bottom: 4px;">🕒 <strong>Timing:</strong> <span id="sess-card-time"></span></div>
-              <div>🔗 <strong>Venue / Link:</strong> <a id="sess-card-link" href="#" target="_blank" style="color: #38bdf8; text-decoration: underline;"></a></div>
-            </div>
-          </div>
 
-          <button type="button" class="btn btn-success" onclick="submitStudentAttendance()">📝 Fill & Submit Attendance</button>
+            <!-- College Institutional Details -->
+            <div class="form-row">
+              <div class="form-group" style="flex: 2;">
+                <label for="prof-college">College / University Name</label>
+                <input type="text" id="prof-college" required placeholder="e.g. National Institute of Technology Karnataka">
+              </div>
+              <div class="form-group">
+                <label for="prof-degree">Degree</label>
+                <input type="text" id="prof-degree" required placeholder="e.g. B.Tech / BE">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group" style="flex: 2;">
+                <label for="prof-branch">Branch / Specialization Stream</label>
+                <input type="text" id="prof-branch" required placeholder="e.g. Computer Science & Engineering">
+              </div>
+              <div class="form-group">
+                <label for="prof-gradyear">Graduation Year</label>
+                <input type="number" id="prof-gradyear" min="2020" max="2035" required placeholder="2027">
+              </div>
+              <div class="form-group">
+                <label for="prof-semester">Current Semester</label>
+                <input type="number" id="prof-semester" min="1" max="8" required placeholder="1-8">
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="prof-department">Academic Department</label>
+                <input type="text" id="prof-department" required placeholder="e.g. Computer Science">
+              </div>
+              <div class="form-group">
+                <label for="prof-email-readonly">Verified Email (Read-Only)</label>
+                <input type="text" id="prof-email-readonly" disabled style="opacity: 0.6; cursor: not-allowed;">
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="prof-bio">Bio / Specialization Focus</label>
+              <textarea id="prof-bio" rows="2" placeholder="Research interests, projects, or AI engineering roadmap..."></textarea>
+            </div>
+
+            <!-- Parent & Guardian Details -->
+            <hr class="divider" style="margin: 20px 0;">
+            <h3 style="margin-bottom: 4px;">👨‍👩‍👧 Parent / Guardian Details</h3>
+            <p class="subtext" style="margin-bottom: 16px;">Primary family contact for academic progress notifications and updates</p>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="prof-parent-name">Parent / Guardian Name</label>
+                <input type="text" id="prof-parent-name" required placeholder="Full Name">
+              </div>
+              <div class="form-group">
+                <label for="prof-parent-relation">Relationship</label>
+                <select id="prof-parent-relation">
+                  <option value="Father">Father</option>
+                  <option value="Mother">Mother</option>
+                  <option value="Guardian">Guardian</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="prof-parent-phone">Parent Phone Number</label>
+                <input type="tel" id="prof-parent-phone" required placeholder="+919876543210">
+              </div>
+              <div class="form-group">
+                <label for="prof-parent-email">Parent Email (Optional)</label>
+                <input type="email" id="prof-parent-email" placeholder="parent@example.com">
+              </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary" style="margin-top: 10px;">💾 Save Complete Profile</button>
+          </form>
         </div>
 
-        <!-- Student Attendance Records -->
+        <!-- Student Attendance Records History -->
         <div class="card table-card">
           <div class="table-header">
-            <h3>📊 My Attendance Records</h3>
+            <h3>📊 Detailed Attendance History</h3>
           </div>
           <div class="table-container">
             <table>
@@ -382,7 +454,7 @@
                   <th>Time</th>
                   <th>Mode</th>
                   <th>Status</th>
-                  <th>Instructor Remarks</th>
+                  <th>Remarks</th>
                 </tr>
               </thead>
               <tbody id="student-attendance-tbody">
@@ -442,6 +514,11 @@
               </div>
             </div>
 
+            <div class="form-group">
+              <label for="stuPassword">Password (for Portal Sign-In)</label>
+              <input type="password" id="stuPassword" minlength="6" required placeholder="Create a secure password (min 6 characters)">
+            </div>
+
             <button type="submit" id="submitRegBtn" class="btn btn-primary full-width">Register & Send OTPs</button>
           </form>
 
@@ -487,7 +564,7 @@
               </div>
             </div>
 
-            <!-- Developer / Network Latency Code Inspector -->
+            <!-- Developer / Test Code Inspector -->
             <div class="debug-inspector-box">
               <div class="debug-inspector-content">
                 <span>⚠️ Carrier delay or running in test mode?</span>
@@ -504,6 +581,52 @@
       </section>
 
     </main>
+  </div>
+
+  <!-- ======================================================== -->
+  <!-- AUTHENTICATION MODAL (STUDENT & ADMIN SIGN IN / SIGN UP)   -->
+  <!-- ======================================================== -->
+  <div id="auth-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-tabs">
+          <button id="modal-tab-stu-login" class="modal-tab-btn active" onclick="switchModalAuthTab('stu-login')">Student Sign In</button>
+          <button id="modal-tab-admin-login" class="modal-tab-btn" onclick="switchModalAuthTab('admin-login')">Admin Portal</button>
+        </div>
+        <button class="modal-close" onclick="closeAuthModal()">&times;</button>
+      </div>
+
+      <!-- 1. Student Login Form -->
+      <form id="auth-student-login-form" class="auth-form" onsubmit="handleStudentLogin(event)">
+        <p class="subtext" style="margin-bottom: 16px;">Sign in with your registered Email or Phone number</p>
+        <div class="form-group">
+          <label for="stu-login-ident">Email Address or Phone Number</label>
+          <input type="text" id="stu-login-ident" required placeholder="name@pragyanai.com or +91...">
+        </div>
+        <div class="form-group">
+          <label for="stu-login-pass">Password</label>
+          <input type="password" id="stu-login-pass" required placeholder="Enter password">
+        </div>
+        <button type="submit" class="btn btn-primary full-width">Sign In as Student</button>
+        <p style="text-align: center; margin-top: 14px; font-size: 13px; color: #94a3b8;">
+          New student? <a href="#" onclick="closeAuthModal(); switchTab('register-tab');" style="color: #38bdf8; font-weight: 500;">Register here</a>
+        </p>
+      </form>
+
+      <!-- 2. Admin Login Form -->
+      <form id="auth-admin-login-form" class="auth-form hidden" onsubmit="handleAdminLogin(event)">
+        <p class="subtext" style="margin-bottom: 16px;">Administrative access for faculty and governance coordinators</p>
+        <div class="form-group">
+          <label for="admin-login-ident">Username or Email</label>
+          <input type="text" id="admin-login-ident" required placeholder="admin or admin@pragyanai.com">
+        </div>
+        <div class="form-group">
+          <label for="admin-login-pass">Password</label>
+          <input type="password" id="admin-login-pass" required placeholder="Enter admin password">
+        </div>
+        <button type="submit" class="btn btn-primary full-width">Sign In to Admin Portal</button>
+      </form>
+    </div>
   </div>
 
   <!-- Runtime Config followed by App Logic -->
