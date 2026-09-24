@@ -65,7 +65,7 @@
         <button type="submit" class="btn btn-primary full-width">Sign In to Admin Portal</button>
       </form>
 
-      <!-- VIEW 3: Student Registration with Live OTP Drawer -->
+      <!-- VIEW 3: Student Registration with Live OTP Drawer & Confirmation -->
       <div id="view-register" class="auth-box-form hidden">
         <form id="studentRegistrationForm" onsubmit="handleRegistration(event)">
           <h3>New Student Registration</h3>
@@ -83,7 +83,7 @@
             </div>
             <div class="form-group">
               <label for="stuPhone">Phone (+91...)</label>
-              <input type="tel" id="stuPhone" required placeholder="+919876543210">
+              <input type="tel" id="stuPhone" required placeholder="+919741007422">
             </div>
           </div>
 
@@ -112,18 +112,33 @@
           <button type="submit" id="submitRegBtn" class="btn btn-primary full-width">Register & Send OTPs</button>
         </form>
 
-        <!-- Dual-Channel Verification Drawer -->
+        <!-- 2-Channel OTP Verification Drawer -->
         <div id="otpDrawer" class="otp-box hidden" style="margin-top: 20px;">
           <hr class="divider">
-          <h4>Verify Contact Channels</h4>
-          <p class="subtext" style="margin-bottom: 12px;">Enter the verification codes sent to your channels.</p>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <h4 style="margin: 0;">Verify Contact Channels</h4>
+            <button type="button" class="btn-resend" style="color: #38bdf8; border-color: #0284c7;" onclick="forceResendBothChannels()">🔄 Resend Both Now</button>
+          </div>
+          <p class="subtext" style="margin-bottom: 14px;">Enter the 6-digit codes sent to your phone and email to complete registration.</p>
+
+          <!-- 🔍 Real-Time Dispatched Codes Banner (Auto-populated on send & resend) -->
+          <div id="liveOtpBanner" class="card" style="background: #0f172a; border: 1px solid #38bdf8; padding: 12px; margin-bottom: 16px; border-radius: 8px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <span style="font-size: 11px; font-weight: 700; color: #38bdf8; text-transform: uppercase; letter-spacing: 0.5px;">📡 Live Dispatched Codes (Debug Inspector)</span>
+              <button type="button" class="btn-sm btn-secondary" onclick="fetchActiveOtpDebug()" style="padding: 2px 6px; font-size: 11px;">Fetch Latest</button>
+            </div>
+            <div id="debugCodesDisplay" style="font-family: monospace; font-size: 13px; color: #f8fafc; display: flex; gap: 16px; flex-wrap: wrap;">
+              <div>📱 SMS OTP: <span id="debugSmsCode" style="color: #10b981; font-weight: bold; letter-spacing: 2px;">Loading...</span> <a href="#" onclick="autoFillOtp('phone')" style="font-size: 11px; color: #38bdf8; text-decoration: underline; margin-left: 4px;">Paste</a></div>
+              <div>✉️ Email OTP: <span id="debugEmailCode" style="color: #10b981; font-weight: bold; letter-spacing: 2px;">Loading...</span> <a href="#" onclick="autoFillOtp('email')" style="font-size: 11px; color: #38bdf8; text-decoration: underline; margin-left: 4px;">Paste</a></div>
+            </div>
+          </div>
           
           <div class="otp-input-row">
             <!-- SMS OTP Card -->
             <div class="otp-card">
               <div class="otp-channel-header">
                 <label>📱 SMS Verification</label>
-                <button type="button" id="btnResendPhone" class="btn-resend" onclick="handleResendOTP('phone')">Resend</button>
+                <button type="button" id="btnResendPhone" class="btn-resend" onclick="handleResendOTP('phone')">Resend SMS</button>
               </div>
               <div class="channel-target-info" id="displayPhoneLabel">+91...</div>
               <div class="input-inline">
@@ -137,7 +152,7 @@
             <div class="otp-card">
               <div class="otp-channel-header">
                 <label>📧 Email Verification</label>
-                <button type="button" id="btnResendEmail" class="btn-resend" onclick="handleResendOTP('email')">Resend</button>
+                <button type="button" id="btnResendEmail" class="btn-resend" onclick="handleResendOTP('email')">Resend Email</button>
               </div>
               <div class="channel-target-info" id="displayEmailLabel">user@...</div>
               <div class="input-inline">
@@ -148,14 +163,31 @@
             </div>
           </div>
 
-          <!-- Debug Code Inspector for Carrier Latency -->
+          <!-- Secondary Debug Inspector Container -->
           <div class="debug-inspector-box" style="margin-top: 14px;">
             <div class="debug-inspector-content">
-              <span>Test mode active?</span>
+              <span>Carrier delay or test mode?</span>
               <button type="button" class="btn btn-secondary btn-sm" onclick="fetchActiveOtpDebug()">🔍 Inspect Codes</button>
             </div>
             <div id="debugCodesContainer" class="hidden"></div>
           </div>
+        </div>
+
+        <!-- Registration Success & Confirmation Card (Revealed after both OTPs verified) -->
+        <div id="registrationConfirmationCard" class="card hidden" style="margin-top: 20px; background: #0c1c1f; border: 1px solid #14532d; text-align: center; padding: 24px;">
+          <div style="font-size: 38px; margin-bottom: 8px;">🎉</div>
+          <h3 style="color: #4ade80; margin-bottom: 6px;">Registration Confirmed!</h3>
+          <p class="subtext" style="color: #86efac; margin-bottom: 16px;">Both your phone number and email address have been successfully validated.</p>
+          
+          <div style="background: rgba(0,0,0,0.3); border-radius: 8px; padding: 12px; margin-bottom: 18px; text-align: left; font-size: 13px; line-height: 1.6;">
+            <div><strong>Student Name:</strong> <span id="confirm-student-name">--</span></div>
+            <div><strong>Registered Email:</strong> <span id="confirm-student-email">--</span></div>
+            <div><strong>Phone Number:</strong> <span id="confirm-student-phone">--</span></div>
+            <div><strong>Onboarding Status:</strong> <span class="tag pending">PENDING INSTRUCTOR APPROVAL</span></div>
+          </div>
+
+          <p class="subtext" style="font-size: 12px; margin-bottom: 16px;">Your record is now active in the directory and ready for attendance logging once approved.</p>
+          <button type="button" class="btn btn-primary full-width" onclick="proceedToSignInAfterConfirmation()">Proceed to Sign In ➔</button>
         </div>
       </div>
 
@@ -600,7 +632,7 @@
       </section>
 
       <!-- ==================================================== -->
-      <!-- STUDENT TAB 3: Personal Attendance History Records  -->
+      <!-- STUDENT TAB 3: Personal Attendance History Records   -->
       <!-- ==================================================== -->
       <section id="student-history-tab" class="tab-pane hidden">
         <header class="topbar">
