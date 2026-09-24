@@ -1,7 +1,8 @@
 /**
  * Frontend Application Controller for PragyanAI EduPortal
- * Manages Tab Switching, Registration & Dual-OTP Verification, Analytics,
- * Student Profile & Attendance Portal, and Administrative Governance.
+ * Manages Authentication, Session State, Tab Switching, Registration & Dual-OTP Verification,
+ * Analytics, Detailed Academic & Parent Profile, Course-Specific Attendance Claims,
+ * and Administrative Governance.
  */
 
 // -------------------------------------------------------------
@@ -11,13 +12,14 @@ const RAW_API_BASE = (typeof CONFIG !== "undefined" && CONFIG.API_BASE_URL)
   ? CONFIG.API_BASE_URL
   : (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
       ? "http://127.0.0.1:8000"
-      : "https://https-gipragyanai-super30-python-project.onrender.com");
+      : "https://pragyanai-super30-python-project-3.onrender.com");
 
 const API_BASE = RAW_API_BASE.replace(/\/api\/?$/, "");
 
 // -------------------------------------------------------------
-// Global Application State
+// Global Application State & Storage Keys
 // -------------------------------------------------------------
+const SESSION_KEY = "pragyan_auth_session";
 let currentPage = 1;
 const pageSize = 10;
 let deptChartInstance = null;
@@ -25,7 +27,7 @@ let verifyChartInstance = null;
 let searchDebounceTimeout = null;
 let globalSessions = [];
 
-// Active Student Verification Session
+// Active Student Verification Session for Onboarding
 let activeStudent = {
   phone: "",
   email: "",
@@ -36,10 +38,158 @@ let activeStudent = {
 };
 
 // -------------------------------------------------------------
+// 🔐 Authentication & Session Persistence Controller
+// -------------------------------------------------------------
+function getSession() {
+  const data = localStorage.getItem(SESSION_KEY);
+  try {
+    return data ? JSON.parse(data) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function setSession(role, user) {
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ role, user, timestamp: Date.now() }));
+  restoreSession();
+}
+
+function clearSession() {
+  localStorage.removeItem(SESSION_KEY);
+  restoreSession();
+}
+
+function restoreSession() {
+  const session = getSession();
+  const avatarEl = document.getElementById("sidebar-avatar");
+  const usernameEl = document.getElementById("sidebar-username");
+  const roleEl = document.getElementById("sidebar-role");
+  const authBtn = document.getElementById("sidebar-auth-btn");
+
+  if (!session) {
+    // Guest State
+    if (avatarEl) avatarEl.innerText = "--";
+    if (usernameEl) usernameEl.innerText = "Guest";
+    if (roleEl) roleEl.innerText = "Not Authenticated";
+    if (authBtn) {
+      authBtn.innerText = "Sign In";
+      authBtn.className = "btn-sm btn-outline";
+      authBtn.onclick = () => openAuthModal("stu-login");
+    }
+    return;
+  }
+
+  // Authenticated State
+  const { role, user } = session;
+  const displayName = user.full_name || user.username || "User";
+  const initials = displayName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase() || "AI";
+
+  if (avatarEl) avatarEl.innerText = initials;
+  if (usernameEl) usernameEl.innerText = displayName;
+  if (roleEl) roleEl.innerText = role.toUpperCase();
+
+  if (authBtn) {
+    authBtn.innerText = "Logout";
+    authBtn.className = "btn-sm btn-danger";
+    authBtn.onclick = () => clearSession();
+  }
+
+  // Sync active student ID input if student is logged in
+  if (role === "student" && user.id) {
+    const stuIdInput = document.getElementById("stu-id-input");
+    if (stuIdInput) stuIdInput.value = user.id;
+  }
+}
+
+function openAuthModal(tab = "stu-login") {
+  const modal = document.getElementById("auth-modal");
+  if (modal) modal.classList.remove("hidden");
+  switchModalAuthTab(tab);
+}
+
+function closeAuthModal() {
+  const modal = document.getElementById("auth-modal");
+  if (modal) modal.classList.add("hidden");
+}
+
+function switchModalAuthTab(tab) {
+  const stuForm = document.getElementById("auth-student-login-form");
+  const adminForm = document.getElementById("auth-admin-login-form");
+  const btnStu = document.getElementById("modal-tab-stu-login");
+  const btnAdmin = document.getElementById("modal-tab-admin-login");
+
+  const isStu = tab === "stu-login";
+  if (stuForm) stuForm.classList.toggle("hidden", !isStu);
+  if (adminForm) adminForm.classList.toggle("hidden", isStu);
+
+  if (btnStu) btnStu.classList.toggle("active", isStu);
+  if (btnAdmin) btnAdmin.classList.toggle("active", !isStu);
+}
+
+async function handleStudentLogin(e) {
+  if (e && e.preventDefault) e.preventDefault();
+  const ident = document.getElementById("stu-login-ident")?.value.trim();
+  const password = document.getElementById("stu-login-pass")?.value.trim();
+
+  if (!ident || !password) {
+    showNotification(null, "Please enter both Email/Phone and Password.", "danger");
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/student/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifier: ident, password })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Student login failed.");
+
+    setSession("student", data.user);
+    closeAuthModal();
+    showNotification(null, `Welcome back, ${data.user.full_name}!`, "success");
+
+    // Route straight to student portal
+    switchTab("student-tab");
+  } catch (err) {
+    showNotification(null, err.message, "danger");
+  }
+}
+
+async function handleAdminLogin(e) {
+  if (e && e.preventDefault) e.preventDefault();
+  const ident = document.getElementById("admin-login-ident")?.value.trim();
+  const password = document.getElementById("admin-login-pass")?.value.trim();
+
+  if (!ident || !password) {
+    showNotification(null, "Please enter Admin username/email and password.", "danger");
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/admin/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifier: ident, password })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Admin authentication failed.");
+
+    setSession("admin", data.user);
+    closeAuthModal();
+    showNotification(null, `Welcome Administrator ${data.user.username}!`, "success");
+
+    // Route to Admin Governance dashboard
+    switchTab("admin-gov-tab");
+  } catch (err) {
+    showNotification(null, err.message, "danger");
+  }
+}
+
+// -------------------------------------------------------------
 // Navigation & Tab Switching
 // -------------------------------------------------------------
 function switchTab(tabId) {
-  // Support both legacy class names (.tab-pane / .nav-btn) and clean layout classes (.tab-content / .tab-btn)
   document.querySelectorAll(".tab-pane, .tab-content").forEach(el => {
     el.classList.remove("active");
     el.classList.add("hidden");
@@ -61,15 +211,218 @@ function switchTab(tabId) {
     targetBtn.classList.remove("text-slate-400");
   }
 
-  // Contextual initializers
-  if (tabId === "admin-tab" || tabId === "tab-admin") {
+  // Tab Context Initializers
+  if (tabId === "admin-tab") {
     loadAllAdminData();
+  } else if (tabId === "admin-gov-tab") {
     loadAdminOnboarding();
     loadAdminSessions();
     loadAdminAttendanceAnalytics();
-  } else if (tabId === "student-tab" || tabId === "tab-student") {
-    loadStudentProfile();
-    loadStudentSessions();
+  } else if (tabId === "student-tab") {
+    loadStudentDashboardData();
+  }
+}
+
+// -------------------------------------------------------------
+// 🎓 STUDENT PORTAL: COURSE, DETAILED PROFILE & ATTENDANCE
+// -------------------------------------------------------------
+function loadStudentDashboardData() {
+  const sidInput = document.getElementById("stu-id-input");
+  const sid = sidInput ? parseInt(sidInput.value, 10) : 1;
+
+  loadStudentDetailedProfile(sid);
+  loadStudentEnrolledCourse(sid);
+  loadStudentAttendanceHistory(sid);
+}
+
+async function loadStudentDetailedProfile(studentId) {
+  try {
+    const res = await fetch(`${API_BASE}/api/student/profile/${studentId}`);
+    if (!res.ok) throw new Error(`Student #${studentId} profile not found.`);
+    const data = await res.json();
+
+    // Populate Academic & Institutional Profile
+    const fullEl = document.getElementById("prof-fullname");
+    const usnEl = document.getElementById("prof-usn");
+    const colEl = document.getElementById("prof-college");
+    const degEl = document.getElementById("prof-degree");
+    const branchEl = document.getElementById("prof-branch");
+    const gradEl = document.getElementById("prof-gradyear");
+    const deptEl = document.getElementById("prof-department");
+    const semEl = document.getElementById("prof-semester");
+    const emailEl = document.getElementById("prof-email-readonly");
+    const bioEl = document.getElementById("prof-bio");
+    const badgeEl = document.getElementById("stu-approval-badge");
+
+    if (fullEl) fullEl.value = data.full_name || "";
+    if (usnEl) usnEl.value = data.usn || "";
+    if (colEl) colEl.value = data.college_name || "";
+    if (degEl) degEl.value = data.degree || "B.Tech";
+    if (branchEl) branchEl.value = data.branch || "";
+    if (gradEl) gradEl.value = data.graduation_year || 2027;
+    if (deptEl) deptEl.value = data.department || "";
+    if (semEl) semEl.value = data.semester || 1;
+    if (emailEl) emailEl.value = data.email || "";
+    if (bioEl) bioEl.value = data.bio || "";
+
+    if (badgeEl) {
+      badgeEl.innerText = `Status: ${data.approval_status}`;
+      badgeEl.className = `tag ${data.approval_status === "APPROVED" ? "ok" : data.approval_status === "REJECTED" ? "no" : ""}`;
+    }
+
+    // Populate Parent / Guardian Details
+    const pNameEl = document.getElementById("prof-parent-name");
+    const pRelEl = document.getElementById("prof-parent-relation");
+    const pPhoneEl = document.getElementById("prof-parent-phone");
+    const pEmailEl = document.getElementById("prof-parent-email");
+
+    if (pNameEl) pNameEl.value = data.parent_name || "";
+    if (pRelEl) pRelEl.value = data.parent_relation || "Father";
+    if (pPhoneEl) pPhoneEl.value = data.parent_phone || "";
+    if (pEmailEl) pEmailEl.value = data.parent_email || "";
+
+  } catch (err) {
+    showNotification(null, err.message, "danger");
+  }
+}
+
+async function saveStudentDetailedProfile(e) {
+  if (e && e.preventDefault) e.preventDefault();
+  const sidInput = document.getElementById("stu-id-input");
+  const studentId = sidInput ? parseInt(sidInput.value, 10) : 1;
+
+  const payload = {
+    full_name: (document.getElementById("prof-fullname")?.value || "").trim(),
+    department: (document.getElementById("prof-department")?.value || "").trim(),
+    semester: parseInt(document.getElementById("prof-semester")?.value, 10) || 1,
+    bio: (document.getElementById("prof-bio")?.value || "").trim(),
+    college_name: (document.getElementById("prof-college")?.value || "").trim(),
+    usn: (document.getElementById("prof-usn")?.value || "").trim(),
+    degree: (document.getElementById("prof-degree")?.value || "B.Tech").trim(),
+    branch: (document.getElementById("prof-branch")?.value || "").trim(),
+    graduation_year: parseInt(document.getElementById("prof-gradyear")?.value, 10) || 2027,
+    parent_name: (document.getElementById("prof-parent-name")?.value || "").trim(),
+    parent_relation: (document.getElementById("prof-parent-relation")?.value || "Parent").trim(),
+    parent_phone: (document.getElementById("prof-parent-phone")?.value || "").trim(),
+    parent_email: (document.getElementById("prof-parent-email")?.value || "").trim() || null,
+  };
+
+  try {
+    const res = await fetch(`${API_BASE}/api/student/profile/${studentId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Failed to update profile.");
+
+    showNotification(null, "Profile, College, and Parent details updated successfully!", "success");
+  } catch (err) {
+    showNotification(null, err.message, "danger");
+  }
+}
+
+async function loadStudentEnrolledCourse(studentId) {
+  const sid = studentId || (document.getElementById("stu-id-input")?.value || 1);
+  const tbody = document.getElementById("student-course-sessions-body");
+  if (!tbody) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/student/enrolled-course/${sid}`);
+    if (!res.ok) throw new Error("Could not retrieve course curriculum.");
+    const data = await res.json();
+
+    const titleEl = document.getElementById("course-title-display");
+    const codeEl = document.getElementById("course-code-badge");
+    const descEl = document.getElementById("course-desc-display");
+
+    if (titleEl) titleEl.innerText = data.course.title;
+    if (codeEl) codeEl.innerText = data.course.code;
+    if (descEl) descEl.innerText = data.course.description || "Comprehensive deep-tech curriculum.";
+
+    if (!data.sessions || !data.sessions.length) {
+      tbody.innerHTML = `<tr><td colspan="5" class="text-center">No sessions scheduled for this course yet.</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = data.sessions.map(s => {
+      let badgeClass = "badge-secondary";
+      if (s.attendance_status === "PRESENT") badgeClass = "badge-success";
+      if (s.attendance_status === "SUBMITTED") badgeClass = "badge-warning";
+      if (s.attendance_status === "ABSENT") badgeClass = "badge-danger";
+
+      const isLocked = s.attendance_status === "PRESENT";
+
+      return `
+        <tr>
+          <td><strong>${s.session_date}</strong><br><small style="color: #94a3b8;">${s.timing}</small></td>
+          <td><strong>${escapeHtml(s.topic)}</strong><br><small style="color: #94a3b8;">${escapeHtml(s.description || '')}</small></td>
+          <td>
+            <span class="tag ${s.mode === 'Online' ? 'ok' : ''}">${s.mode}</span><br>
+            <a href="${s.meeting_link}" target="_blank" style="font-size: 11px; color: #38bdf8; text-decoration: underline;">Open Link / Room</a>
+          </td>
+          <td>
+            <span class="badge ${badgeClass}">${s.attendance_status}</span>
+            ${s.remarks ? `<div style="font-size: 11px; color: #94a3b8; margin-top: 4px;">${escapeHtml(s.remarks)}</div>` : ''}
+          </td>
+          <td style="text-align: right;">
+            <button class="btn btn-success btn-sm" ${isLocked ? 'disabled style="opacity: 0.5; cursor: not-allowed;"' : ''} onclick="submitAttendanceClaim(${sid}, ${s.session_id}, 'PRESENT')">Present</button>
+            <button class="btn btn-secondary btn-sm" ${isLocked ? 'disabled style="opacity: 0.5; cursor: not-allowed;"' : ''} onclick="submitAttendanceClaim(${sid}, ${s.session_id}, 'ABSENT')">Absent</button>
+          </td>
+        </tr>
+      `;
+    }).join("");
+
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" class="text-center" style="color: #ef4444;">${err.message}</td></tr>`;
+  }
+}
+
+async function submitAttendanceClaim(studentId, sessionId, claim) {
+  try {
+    const res = await fetch(`${API_BASE}/api/student/attendance/mark`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ student_id: studentId, session_id: sessionId, claim })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Attendance claim failed.");
+
+    showNotification(null, data.message, "success");
+    loadStudentEnrolledCourse(studentId);
+    loadStudentAttendanceHistory(studentId);
+  } catch (err) {
+    showNotification(null, err.message, "danger");
+  }
+}
+
+async function loadStudentAttendanceHistory(studentId) {
+  const tbody = document.getElementById("student-attendance-tbody");
+  if (!tbody) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/student/attendance/history/${studentId}`);
+    const rows = await res.json();
+
+    if (!rows.length) {
+      tbody.innerHTML = `<tr><td colspan="6" class="text-center" style="color: #94a3b8;">No attendance history recorded yet.</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = rows.map(r => `
+      <tr>
+        <td><strong>${escapeHtml(r.topic)}</strong></td>
+        <td>${r.session_date}</td>
+        <td>${r.timing}</td>
+        <td>${r.mode}</td>
+        <td>
+          <span class="tag ${r.status === 'PRESENT' ? 'ok' : r.status === 'ABSENT' ? 'no' : ''}">${r.status}</span>
+        </td>
+        <td style="color: #94a3b8;">${escapeHtml(r.remarks || "-")}</td>
+      </tr>
+    `).join("");
+  } catch (err) {
+    console.error("Attendance history load error:", err);
   }
 }
 
@@ -81,22 +434,24 @@ async function handleRegistration(e) {
   const notify = document.getElementById("notifyMessage");
   const submitBtn = document.getElementById("submitRegBtn");
 
-  const nameInput = document.getElementById("stuName") || document.getElementById("reg-name");
-  const emailInput = document.getElementById("stuEmail") || document.getElementById("reg-email");
-  const phoneInput = document.getElementById("stuPhone") || document.getElementById("reg-phone");
-  const deptInput = document.getElementById("stuDept") || document.getElementById("reg-dept");
-  const semInput = document.getElementById("stuSem") || document.getElementById("reg-sem");
+  const nameInput = document.getElementById("stuName");
+  const emailInput = document.getElementById("stuEmail");
+  const phoneInput = document.getElementById("stuPhone");
+  const deptInput = document.getElementById("stuDept");
+  const semInput = document.getElementById("stuSem");
+  const passInput = document.getElementById("stuPassword");
 
   const payload = {
-    name: nameInput ? nameInput.value.trim() : "",
+    full_name: nameInput ? nameInput.value.trim() : "",
     email: emailInput ? emailInput.value.trim().toLowerCase() : "",
     phone: phoneInput ? phoneInput.value.trim() : "",
     department: deptInput ? deptInput.value.trim() : "",
-    semester: semInput ? (parseInt(semInput.value, 10) || 1) : 1
+    semester: semInput ? (parseInt(semInput.value, 10) || 1) : 1,
+    password: passInput ? passInput.value.trim() : "student123",
   };
 
-  if (!payload.name || !payload.email || !payload.phone) {
-    showNotification(notify, "Please fill in Name, Email, and Phone number.", "danger");
+  if (!payload.full_name || !payload.email || !payload.phone || !payload.password) {
+    showNotification(notify, "Please fill in Name, Email, Phone, and Password.", "danger");
     return;
   }
 
@@ -106,7 +461,7 @@ async function handleRegistration(e) {
   }
 
   try {
-    const res = await fetch(`${API_BASE}/api/students/register`, {
+    const res = await fetch(`${API_BASE}/api/auth/student/signup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
@@ -115,35 +470,27 @@ async function handleRegistration(e) {
 
     if (!res.ok) throw new Error(data.detail || "Registration failed");
 
-    // Cache active student verification credentials
+    // Cache credentials for subsequent verification
     activeStudent.phone = payload.phone;
     activeStudent.email = payload.email;
     activeStudent.phoneVerified = false;
     activeStudent.emailVerified = false;
 
-    showNotification(notify, `${data.message} OTPs sent to ${payload.phone} and ${payload.email}`, "success");
+    showNotification(notify, `${data.message} Verification OTPs sent.`, "success");
 
-    // Populate target labels / inputs
     const phoneLabel = document.getElementById("displayPhoneLabel");
     const emailLabel = document.getElementById("displayEmailLabel");
     if (phoneLabel) phoneLabel.innerText = payload.phone;
     if (emailLabel) emailLabel.innerText = payload.email;
 
-    const verifyEmailAddr = document.getElementById("verify-email-addr");
-    const verifyPhoneNum = document.getElementById("verify-phone-num");
-    if (verifyEmailAddr) verifyEmailAddr.value = payload.email;
-    if (verifyPhoneNum) verifyPhoneNum.value = payload.phone;
-
-    // Display verification drawer if present
     const drawer = document.getElementById("otpDrawer");
     if (drawer) drawer.classList.remove("hidden");
 
-    // Reset verification input states
     ["phoneVerifyBadge", "emailVerifyBadge"].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.innerText = "";
     });
-    ["phoneOtpInput", "emailOtpInput", "verify-phone-otp", "verify-email-otp"].forEach(id => {
+    ["phoneOtpInput", "emailOtpInput"].forEach(id => {
       const el = document.getElementById(id);
       if (el) { el.value = ""; el.disabled = false; }
     });
@@ -152,14 +499,6 @@ async function handleRegistration(e) {
       if (el) el.disabled = false;
     });
 
-    // Reset inspector box
-    const debugBox = document.getElementById("debugCodesContainer");
-    if (debugBox) {
-      debugBox.classList.add("hidden");
-      debugBox.innerHTML = "";
-    }
-
-    // Cooldown timers
     startCooldownTimer("phone", 30);
     startCooldownTimer("email", 30);
 
@@ -178,15 +517,7 @@ async function verifyOTP(type) {
   const isPhone = type === "phone";
 
   let identifier = isPhone ? activeStudent.phone : activeStudent.email;
-  if (!identifier) {
-    const fallbackInput = document.getElementById(isPhone ? "verify-phone-num" : "verify-email-addr");
-    if (fallbackInput && fallbackInput.value.trim()) {
-      identifier = fallbackInput.value.trim();
-    }
-  }
-
-  const inputEl = document.getElementById(isPhone ? "phoneOtpInput" : "emailOtpInput") ||
-                  document.getElementById(isPhone ? "verify-phone-otp" : "verify-email-otp");
+  const inputEl = document.getElementById(isPhone ? "phoneOtpInput" : "emailOtpInput");
   const otp = inputEl ? inputEl.value.trim() : "";
 
   if (!otp || otp.length < 4) {
@@ -240,13 +571,6 @@ async function handleResendOTP(channel) {
   let identifier = isPhone ? activeStudent.phone : activeStudent.email;
 
   if (!identifier) {
-    const fallbackInput = document.getElementById(isPhone ? "verify-phone-num" : "verify-email-addr");
-    if (fallbackInput && fallbackInput.value.trim()) {
-      identifier = fallbackInput.value.trim();
-    }
-  }
-
-  if (!identifier) {
     showNotification(notify, "No active registration. Please enter your email or phone first.", "danger");
     return;
   }
@@ -265,12 +589,6 @@ async function handleResendOTP(channel) {
     if (!res.ok) throw new Error(data.detail || `Failed to resend ${channel} code.`);
 
     showNotification(notify, `✓ ${data.message}`, "success");
-
-    const debugBox = document.getElementById("debugCodesContainer");
-    if (debugBox && !debugBox.classList.contains("hidden")) {
-      fetchActiveOtpDebug();
-    }
-
     startCooldownTimer(channel, 45);
 
   } catch (err) {
@@ -306,14 +624,14 @@ function startCooldownTimer(channel, seconds) {
 }
 
 // -------------------------------------------------------------
-// Debug / Active OTP Inspector
+// Developer / Active OTP Inspector
 // -------------------------------------------------------------
 async function fetchActiveOtpDebug() {
   const container = document.getElementById("debugCodesContainer");
   if (!container) return;
 
   container.classList.remove("hidden");
-  container.innerHTML = `<span style="color: #94a3b8; font-size: 12px;">Querying server memory for active codes...</span>`;
+  container.innerHTML = `<span style="color: #94a3b8; font-size: 12px;">Querying active test codes...</span>`;
 
   try {
     const phoneQuery = encodeURIComponent(activeStudent.phone || "");
@@ -334,194 +652,12 @@ async function fetchActiveOtpDebug() {
       </div>
     `;
   } catch (err) {
-    container.innerHTML = `<span style="color: #ef4444; font-size: 12px;">Failed to fetch debug codes. Verify backend logs.</span>`;
+    container.innerHTML = `<span style="color: #ef4444; font-size: 12px;">Failed to load active codes.</span>`;
   }
 }
 
 // -------------------------------------------------------------
-// 🎓 STUDENT PORTAL HANDLERS
-// -------------------------------------------------------------
-async function loadStudentProfile() {
-  const sidInput = document.getElementById("stu-id-input");
-  const sid = sidInput ? sidInput.value : 1;
-
-  try {
-    const res = await fetch(`${API_BASE}/api/student/profile/${sid}`);
-    if (!res.ok) throw new Error(`Student #${sid} not found.`);
-    const data = await res.json();
-
-    const nameEl = document.getElementById("stu-name");
-    const deptEl = document.getElementById("stu-dept");
-    const emailEl = document.getElementById("stu-email");
-    const bioEl = document.getElementById("stu-bio");
-    const appStatusEl = document.getElementById("stu-approval");
-
-    if (nameEl) nameEl.value = data.full_name || "";
-    if (deptEl) deptEl.value = data.department || "";
-    if (emailEl) emailEl.value = data.email || "";
-    if (bioEl) bioEl.value = data.bio || "";
-
-    if (appStatusEl) {
-      appStatusEl.value = data.approval_status;
-      appStatusEl.className = `w-full bg-[#0b0f19]/50 border border-[#222f49] rounded-lg p-2.5 text-sm font-semibold cursor-not-allowed ${
-        data.approval_status === "APPROVED" ? "text-emerald-400" : data.approval_status === "REJECTED" ? "text-rose-400" : "text-amber-400"
-      }`;
-    }
-
-    loadStudentAttendanceHistory(sid);
-  } catch (err) {
-    showNotification(null, err.message, "danger");
-  }
-}
-
-async function saveStudentProfile() {
-  const sid = document.getElementById("stu-id-input")?.value || 1;
-  const payload = {
-    full_name: (document.getElementById("stu-name")?.value || "").trim(),
-    department: (document.getElementById("stu-dept")?.value || "").trim(),
-    bio: (document.getElementById("stu-bio")?.value || "").trim(),
-  };
-
-  try {
-    const res = await fetch(`${API_BASE}/api/student/profile/${sid}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || "Update failed");
-    showNotification(null, "Profile updated successfully!", "success");
-  } catch (err) {
-    showNotification(null, err.message, "danger");
-  }
-}
-
-async function loadStudentSessions() {
-  try {
-    const res = await fetch(`${API_BASE}/api/student/sessions`);
-    globalSessions = await res.json();
-
-    const select = document.getElementById("session-select");
-    if (!select) return;
-
-    select.innerHTML = globalSessions
-      .map(s => `<option value="${s.id}">${s.topic} (${s.session_date})</option>`)
-      .join("");
-
-    displayStudentSessionDetails();
-  } catch (err) {
-    console.error("Failed to load student sessions:", err);
-  }
-}
-
-function displayStudentSessionDetails() {
-  const select = document.getElementById("session-select");
-  if (!select) return;
-
-  const sid = parseInt(select.value, 10);
-  const session = globalSessions.find(s => s.id === sid);
-  const card = document.getElementById("session-details-card");
-
-  if (!session) {
-    if (card) card.classList.add("hidden");
-    return;
-  }
-
-  if (card) card.classList.remove("hidden");
-
-  const topicEl = document.getElementById("sess-card-topic");
-  const descEl = document.getElementById("sess-card-desc");
-  const timeEl = document.getElementById("sess-card-time");
-  const linkEl = document.getElementById("sess-card-link");
-  const modeEl = document.getElementById("sess-card-mode");
-
-  if (topicEl) topicEl.textContent = session.topic;
-  if (descEl) descEl.textContent = session.description || "No prerequisites specified.";
-  if (timeEl) timeEl.textContent = `${session.session_date} | ${session.timing}`;
-
-  if (linkEl) {
-    linkEl.href = session.meeting_link;
-    linkEl.textContent = session.meeting_link;
-  }
-
-  if (modeEl) {
-    modeEl.textContent = session.mode;
-    modeEl.className = `px-2 py-0.5 rounded text-xs font-semibold ${
-      session.mode === "Online"
-        ? "bg-blue-900 text-blue-300"
-        : session.mode === "Hybrid"
-        ? "bg-purple-900 text-purple-300"
-        : "bg-slate-700 text-slate-300"
-    }`;
-  }
-}
-
-async function submitStudentAttendance() {
-  const sidInput = document.getElementById("stu-id-input");
-  const sessSelect = document.getElementById("session-select");
-
-  const studentId = sidInput ? parseInt(sidInput.value, 10) : 1;
-  const sessionId = sessSelect ? parseInt(sessSelect.value, 10) : null;
-
-  if (!sessionId) {
-    showNotification(null, "Please select an active session first.", "danger");
-    return;
-  }
-
-  try {
-    const res = await fetch(`${API_BASE}/api/student/attendance/submit`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ student_id: studentId, session_id: sessionId }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || "Attendance submission failed");
-
-    showNotification(null, data.message, "success");
-    loadStudentAttendanceHistory(studentId);
-  } catch (err) {
-    showNotification(null, err.message, "danger");
-  }
-}
-
-async function loadStudentAttendanceHistory(studentId) {
-  const tbody = document.getElementById("student-attendance-tbody");
-  if (!tbody) return;
-
-  try {
-    const res = await fetch(`${API_BASE}/api/student/attendance/history/${studentId}`);
-    const rows = await res.json();
-
-    if (!rows.length) {
-      tbody.innerHTML = `<tr><td colspan="6" class="p-3 text-center text-slate-500">No attendance records found.</td></tr>`;
-      return;
-    }
-
-    tbody.innerHTML = rows.map(r => `
-      <tr class="border-b border-[#222f49] hover:bg-[#1a233a]">
-        <td class="p-3 font-medium text-white">${escapeHtml(r.topic)}</td>
-        <td class="p-3">${r.session_date}</td>
-        <td class="p-3">${r.timing}</td>
-        <td class="p-3">${r.mode}</td>
-        <td class="p-3">
-          <span class="px-2 py-0.5 rounded text-[11px] font-semibold ${
-            r.status === "PRESENT"
-              ? "bg-emerald-950 text-emerald-400 border border-emerald-800"
-              : r.status === "ABSENT"
-              ? "bg-rose-950 text-rose-400 border border-rose-800"
-              : "bg-amber-950 text-amber-400 border border-amber-800"
-          }">${r.status}</span>
-        </td>
-        <td class="p-3 text-slate-400">${escapeHtml(r.remarks || "-")}</td>
-      </tr>
-    `).join("");
-  } catch (err) {
-    console.error("Attendance history load error:", err);
-  }
-}
-
-// -------------------------------------------------------------
-// 🛡️ ADMIN DASHBOARD HANDLERS
+// 🛡️ ADMIN GOVERNANCE HANDLERS
 // -------------------------------------------------------------
 async function loadAdminOnboarding() {
   const filterSelect = document.getElementById("admin-onboarding-filter");
@@ -534,29 +670,23 @@ async function loadAdminOnboarding() {
     const students = await res.json();
 
     if (!students.length) {
-      tbody.innerHTML = `<tr><td colspan="7" class="p-3 text-center text-slate-500">No student applications found.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="7" class="text-center" style="color: #94a3b8;">No student applications found.</td></tr>`;
       return;
     }
 
     tbody.innerHTML = students.map(s => `
-      <tr class="border-b border-[#222f49] hover:bg-[#1a233a]">
-        <td class="p-3 font-mono">#${s.id}</td>
-        <td class="p-3 font-medium text-white">${escapeHtml(s.full_name)}</td>
-        <td class="p-3">${escapeHtml(s.email)}</td>
-        <td class="p-3 font-mono">${escapeHtml(s.phone)}</td>
-        <td class="p-3">E: ${s.email_verified ? "✅" : "❌"} | P: ${s.phone_verified ? "✅" : "❌"}</td>
-        <td class="p-3">
-          <span class="font-semibold ${
-            s.approval_status === "APPROVED"
-              ? "text-emerald-400"
-              : s.approval_status === "REJECTED"
-              ? "text-rose-400"
-              : "text-amber-400"
-          }">${s.approval_status}</span>
+      <tr>
+        <td>#${s.id}</td>
+        <td><strong>${escapeHtml(s.full_name)}</strong></td>
+        <td>${escapeHtml(s.email)}</td>
+        <td>${escapeHtml(s.phone)}</td>
+        <td>E: ${s.email_verified ? "✅" : "❌"} | P: ${s.phone_verified ? "✅" : "❌"}</td>
+        <td>
+          <span class="tag ${s.approval_status === 'APPROVED' ? 'ok' : s.approval_status === 'REJECTED' ? 'no' : ''}">${s.approval_status}</span>
         </td>
-        <td class="p-3 text-right space-x-2">
-          <button onclick="actionOnboarding(${s.id}, 'APPROVED')" class="px-2 py-1 bg-emerald-600/80 hover:bg-emerald-600 text-white rounded text-[11px]">Approve</button>
-          <button onclick="actionOnboarding(${s.id}, 'REJECTED')" class="px-2 py-1 bg-rose-600/80 hover:bg-rose-600 text-white rounded text-[11px]">Reject</button>
+        <td style="text-align: right;">
+          <button onclick="actionOnboarding(${s.id}, 'APPROVED')" class="btn btn-success btn-sm">Approve</button>
+          <button onclick="actionOnboarding(${s.id}, 'REJECTED')" class="btn btn-secondary btn-sm">Reject</button>
         </td>
       </tr>
     `).join("");
@@ -585,6 +715,7 @@ async function actionOnboarding(studentId, decision) {
 
 async function publishAcademicSession() {
   const payload = {
+    course_id: 1,
     topic: (document.getElementById("new-sess-topic")?.value || "").trim(),
     session_date: document.getElementById("new-sess-date")?.value || "",
     timing: (document.getElementById("new-sess-time")?.value || "").trim(),
@@ -644,27 +775,21 @@ async function loadAdminRoster() {
     const roster = await res.json();
 
     if (!roster.length) {
-      tbody.innerHTML = `<tr><td colspan="5" class="p-3 text-center text-slate-500">No approved students found for this session.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="5" class="text-center" style="color: #94a3b8;">No approved students found for this session.</td></tr>`;
       return;
     }
 
     tbody.innerHTML = roster.map(r => `
-      <tr class="border-b border-[#222f49] hover:bg-[#1a233a]">
-        <td class="p-3 font-mono">#${r.student_id}</td>
-        <td class="p-3 font-medium text-white">${escapeHtml(r.full_name)}</td>
-        <td class="p-3">
-          <span class="px-2 py-0.5 rounded text-[11px] font-semibold ${
-            r.status === "PRESENT"
-              ? "bg-emerald-950 text-emerald-400"
-              : r.status === "ABSENT"
-              ? "bg-rose-950 text-rose-400"
-              : "bg-amber-950 text-amber-400"
-          }">${r.status}</span>
+      <tr>
+        <td>#${r.student_id}</td>
+        <td><strong>${escapeHtml(r.full_name)}</strong></td>
+        <td>
+          <span class="tag ${r.status === 'PRESENT' ? 'ok' : r.status === 'ABSENT' ? 'no' : ''}">${r.status}</span>
         </td>
-        <td class="p-3 text-slate-400">${escapeHtml(r.remarks || "-")}</td>
-        <td class="p-3 text-right space-x-2">
-          <button onclick="reviewAttendance(${select.value}, ${r.student_id}, 'PRESENT')" class="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px]">Mark Present</button>
-          <button onclick="reviewAttendance(${select.value}, ${r.student_id}, 'ABSENT')" class="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded text-[11px]">Mark Absent</button>
+        <td style="color: #94a3b8;">${escapeHtml(r.remarks || "-")}</td>
+        <td style="text-align: right;">
+          <button onclick="reviewAttendance(${select.value}, ${r.student_id}, 'PRESENT')" class="btn btn-success btn-sm">Approve Present</button>
+          <button onclick="reviewAttendance(${select.value}, ${r.student_id}, 'ABSENT')" class="btn btn-secondary btn-sm">Mark Absent</button>
         </td>
       </tr>
     `).join("");
@@ -680,7 +805,7 @@ async function reviewAttendance(sessionId, studentId, statusDecision) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         status: statusDecision,
-        remarks: `Marked by Instructor as ${statusDecision}`,
+        remarks: `Reviewed and confirmed as ${statusDecision} by instructor`,
       }),
     });
     const data = await res.json();
@@ -702,18 +827,18 @@ async function loadAdminAttendanceAnalytics() {
     const analytics = await res.json();
 
     if (!analytics.length) {
-      tbody.innerHTML = `<tr><td colspan="6" class="p-3 text-center text-slate-500">No session analytics available.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="6" class="text-center" style="color: #94a3b8;">No session analytics available.</td></tr>`;
       return;
     }
 
     tbody.innerHTML = analytics.map(a => `
-      <tr class="border-b border-[#222f49] hover:bg-[#1a233a]">
-        <td class="p-3 font-medium text-white">${escapeHtml(a.topic)}</td>
-        <td class="p-3">${a.session_date}</td>
-        <td class="p-3">${a.mode}</td>
-        <td class="p-3 font-bold text-emerald-400">${a.present_count}</td>
-        <td class="p-3 font-bold text-rose-400">${a.absent_count}</td>
-        <td class="p-3 font-bold text-amber-400">${a.submitted_count}</td>
+      <tr>
+        <td><strong>${escapeHtml(a.topic)}</strong></td>
+        <td>${a.session_date}</td>
+        <td>${a.mode}</td>
+        <td style="color: #10b981; font-weight: bold;">${a.present_count}</td>
+        <td style="color: #ef4444; font-weight: bold;">${a.absent_count}</td>
+        <td style="color: #f59e0b; font-weight: bold;">${a.submitted_count}</td>
       </tr>
     `).join("");
   } catch (err) {
@@ -722,7 +847,7 @@ async function loadAdminAttendanceAnalytics() {
 }
 
 // -------------------------------------------------------------
-// Analytics & Chart.js Visualizations (Legacy Support)
+// Analytics & Chart.js Visualizations
 // -------------------------------------------------------------
 async function loadAnalytics() {
   try {
@@ -906,33 +1031,25 @@ function loadAllAdminData() {
 // Utilities & Global Notification Bridge
 // -------------------------------------------------------------
 function showNotification(el, message, type) {
-  // Legacy targeted element support
   if (el) {
     el.classList.remove("hidden");
     el.innerText = message;
-    if (type === "success") {
-      el.style.borderColor = "#10b981";
-      el.style.background = "rgba(16, 185, 129, 0.15)";
-      el.style.color = "#10b981";
-    } else {
-      el.style.borderColor = "#ef4444";
-      el.style.background = "rgba(239, 68, 68, 0.15)";
-      el.style.color = "#ef4444";
-    }
+    el.style.borderColor = type === "success" ? "#10b981" : "#ef4444";
+    el.style.background = type === "success" ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)";
+    el.style.color = type === "success" ? "#10b981" : "#ef4444";
     return;
   }
 
-  // Modern banner fallback
   const banner = document.getElementById("status-banner");
   if (!banner) return;
 
   const isSuccess = type === "success";
   banner.textContent = message;
-  banner.className = `mb-6 p-4 rounded-lg text-sm border font-medium ${
-    isSuccess
-      ? "bg-emerald-950/60 border-emerald-700 text-emerald-300"
-      : "bg-rose-950/60 border-rose-700 text-rose-300"
-  }`;
+  banner.className = `notify ${isSuccess ? "ok" : "danger"}`;
+  banner.style.display = "block";
+  banner.style.background = isSuccess ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)";
+  banner.style.color = isSuccess ? "#10b981" : "#ef4444";
+  banner.style.borderColor = isSuccess ? "#10b981" : "#ef4444";
   banner.classList.remove("hidden");
   window.scrollTo({ top: 0, behavior: "smooth" });
   setTimeout(() => banner.classList.add("hidden"), 6000);
@@ -946,14 +1063,34 @@ function escapeHtml(text) {
 }
 
 // -------------------------------------------------------------
-// Global Aliases for Index Buttons & Initial Setup
+// Global Window Aliases & Initializer
 // -------------------------------------------------------------
 window.registerStudent = handleRegistration;
-window.verifyOtp = verifyOTP;
-window.resendOtp = handleResendOTP;
-window.publishSession = publishAcademicSession;
-window.submitAttendance = submitStudentAttendance;
+window.verifyOTP = verifyOTP;
+window.handleResendOTP = handleResendOTP;
+window.publishAcademicSession = publishAcademicSession;
+window.submitAttendanceClaim = submitAttendanceClaim;
+window.loadStudentDashboardData = loadStudentDashboardData;
+window.loadStudentEnrolledCourse = loadStudentEnrolledCourse;
+window.saveStudentDetailedProfile = saveStudentDetailedProfile;
+window.openAuthModal = openAuthModal;
+window.closeAuthModal = closeAuthModal;
+window.switchModalAuthTab = switchModalAuthTab;
+window.handleStudentLogin = handleStudentLogin;
+window.handleAdminLogin = handleAdminLogin;
+window.actionOnboarding = actionOnboarding;
+window.reviewAttendance = reviewAttendance;
+window.loadAdminRoster = loadAdminRoster;
+window.loadAdminOnboarding = loadAdminOnboarding;
+window.loadAdminAttendanceAnalytics = loadAdminAttendanceAnalytics;
+window.fetchActiveOtpDebug = fetchActiveOtpDebug;
+window.changePage = changePage;
+window.debounceSearch = debounceSearch;
+window.resetAndFetchTable = resetAndFetchTable;
+window.loadAllAdminData = loadAllAdminData;
+window.switchTab = switchTab;
 
 window.addEventListener("DOMContentLoaded", () => {
+  restoreSession();
   loadAllAdminData();
 });
