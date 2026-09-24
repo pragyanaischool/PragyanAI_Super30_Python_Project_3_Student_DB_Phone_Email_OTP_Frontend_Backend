@@ -1,8 +1,8 @@
 /**
  * Frontend Application Controller for PragyanAI EduPortal
- * Manages Authentication, Session State, Tab Switching, Registration & Dual-OTP Verification,
- * Analytics, Detailed Academic & Parent Profile, Course-Specific Attendance Claims,
- * and Administrative Governance.
+ * Manages Clean Initial Login View, Session State, Role-Based Dashboards,
+ * Registration & Dual-OTP Verification, Analytics, Detailed Academic & Parent Profile,
+ * Course-Specific Attendance Claims, and Administrative Governance.
  */
 
 // -------------------------------------------------------------
@@ -38,7 +38,7 @@ let activeStudent = {
 };
 
 // -------------------------------------------------------------
-// 🔐 Authentication & Session Persistence Controller
+// 🔐 1. Authentication & Session Persistence Controller
 // -------------------------------------------------------------
 function getSession() {
   const data = localStorage.getItem(SESSION_KEY);
@@ -57,17 +57,31 @@ function setSession(role, user) {
 function clearSession() {
   localStorage.removeItem(SESSION_KEY);
   restoreSession();
+  showNotification(null, "Logged out successfully.", "success");
+}
+
+function logoutSession() {
+  clearSession();
 }
 
 function restoreSession() {
   const session = getSession();
-  const avatarEl = document.getElementById("sidebar-avatar");
-  const usernameEl = document.getElementById("sidebar-username");
-  const roleEl = document.getElementById("sidebar-role");
-  const authBtn = document.getElementById("sidebar-auth-btn");
+
+  // 1. Layout Mode Switcher (Auth Landing Page vs. Logged-in App Shell)
+  const authPageView = document.getElementById("auth-page-view");
+  const appViewContainer = document.getElementById("app-view-container");
 
   if (!session) {
-    // Guest State
+    // Unauthenticated State: Show Landing Login Card if present
+    if (authPageView) authPageView.classList.remove("hidden");
+    if (appViewContainer) appViewContainer.classList.add("hidden");
+
+    // Legacy Sidebar Elements Update
+    const avatarEl = document.getElementById("sidebar-avatar");
+    const usernameEl = document.getElementById("sidebar-username");
+    const roleEl = document.getElementById("sidebar-role");
+    const authBtn = document.getElementById("sidebar-auth-btn");
+
     if (avatarEl) avatarEl.innerText = "--";
     if (usernameEl) usernameEl.innerText = "Guest";
     if (roleEl) roleEl.innerText = "Not Authenticated";
@@ -76,29 +90,83 @@ function restoreSession() {
       authBtn.className = "btn-sm btn-outline";
       authBtn.onclick = () => openAuthModal("stu-login");
     }
+
+    showAuthView("stu-login");
     return;
   }
 
-  // Authenticated State
+  // Authenticated State: Reveal App Layout and Hide Landing Page
+  if (authPageView) authPageView.classList.add("hidden");
+  if (appViewContainer) appViewContainer.classList.remove("hidden");
+
   const { role, user } = session;
   const displayName = user.full_name || user.username || "User";
-  const initials = displayName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase() || "AI";
+  const initials = displayName
+    .split(" ")
+    .map(n => n[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase() || "AI";
 
-  if (avatarEl) avatarEl.innerText = initials;
-  if (usernameEl) usernameEl.innerText = displayName;
-  if (roleEl) roleEl.innerText = role.toUpperCase();
+  // Update App Layout Profile Headers
+  const appAvatar = document.getElementById("app-user-avatar");
+  const appName = document.getElementById("app-user-name");
+  const appSub = document.getElementById("app-user-sub");
+  const appBadge = document.getElementById("app-user-role-badge");
 
-  if (authBtn) {
-    authBtn.innerText = "Logout";
-    authBtn.className = "btn-sm btn-danger";
-    authBtn.onclick = () => clearSession();
+  if (appAvatar) appAvatar.innerText = initials;
+  if (appName) appName.innerText = displayName;
+  if (appSub) appSub.innerText = role === "admin" ? "Administrator" : (user.department || "Student");
+  if (appBadge) appBadge.innerText = role.toUpperCase();
+
+  // Update Legacy Sidebar Elements
+  const sideAvatar = document.getElementById("sidebar-avatar");
+  const sideName = document.getElementById("sidebar-username");
+  const sideRole = document.getElementById("sidebar-role");
+  const sideAuthBtn = document.getElementById("sidebar-auth-btn");
+
+  if (sideAvatar) sideAvatar.innerText = initials;
+  if (sideName) sideName.innerText = displayName;
+  if (sideRole) sideRole.innerText = role.toUpperCase();
+  if (sideAuthBtn) {
+    sideAuthBtn.innerText = "Logout";
+    sideAuthBtn.className = "btn-sm btn-danger";
+    sideAuthBtn.onclick = () => logoutSession();
   }
 
-  // Sync active student ID input if student is logged in
-  if (role === "student" && user.id) {
-    const stuIdInput = document.getElementById("stu-id-input");
-    if (stuIdInput) stuIdInput.value = user.id;
+  // Sync Input Elements
+  const stuIdInput = document.getElementById("stu-id-input");
+  if (stuIdInput && role === "student" && user.id) {
+    stuIdInput.value = user.id;
   }
+
+  // Toggle Navigation Visibility based on Role
+  const adminNav = document.getElementById("admin-nav-group");
+  const studentNav = document.getElementById("student-nav-group");
+
+  if (role === "admin") {
+    if (adminNav) adminNav.classList.remove("hidden");
+    if (studentNav) studentNav.classList.add("hidden");
+    switchAppTab("admin-tab");
+  } else {
+    if (adminNav) adminNav.classList.add("hidden");
+    if (studentNav) studentNav.classList.remove("hidden");
+    switchAppTab("student-course-tab");
+  }
+}
+
+function renderActiveView() {
+  restoreSession();
+}
+
+function showAuthView(viewName) {
+  const views = ["stu-login", "admin-login", "register"];
+  views.forEach(v => {
+    const el = document.getElementById(`view-${v}`);
+    const btn = document.getElementById(`tab-btn-${v}`);
+    if (el) el.classList.toggle("hidden", v !== viewName);
+    if (btn) btn.classList.toggle("active", v === viewName);
+  });
 }
 
 function openAuthModal(tab = "stu-login") {
@@ -128,10 +196,13 @@ function switchModalAuthTab(tab) {
 
 async function handleStudentLogin(e) {
   if (e && e.preventDefault) e.preventDefault();
-  const ident = document.getElementById("stu-login-ident")?.value.trim();
-  const password = document.getElementById("stu-login-pass")?.value.trim();
+  const identInput = document.getElementById("stu-login-ident");
+  const passInput = document.getElementById("stu-login-pass");
 
-  if (!ident || !password) {
+  const identifier = identInput ? identInput.value.trim() : "";
+  const password = passInput ? passInput.value.trim() : "";
+
+  if (!identifier || !password) {
     showNotification(null, "Please enter both Email/Phone and Password.", "danger");
     return;
   }
@@ -140,7 +211,7 @@ async function handleStudentLogin(e) {
     const res = await fetch(`${API_BASE}/api/auth/student/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ identifier: ident, password })
+      body: JSON.stringify({ identifier, password })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Student login failed.");
@@ -148,9 +219,6 @@ async function handleStudentLogin(e) {
     setSession("student", data.user);
     closeAuthModal();
     showNotification(null, `Welcome back, ${data.user.full_name}!`, "success");
-
-    // Route straight to student portal
-    switchTab("student-tab");
   } catch (err) {
     showNotification(null, err.message, "danger");
   }
@@ -158,10 +226,13 @@ async function handleStudentLogin(e) {
 
 async function handleAdminLogin(e) {
   if (e && e.preventDefault) e.preventDefault();
-  const ident = document.getElementById("admin-login-ident")?.value.trim();
-  const password = document.getElementById("admin-login-pass")?.value.trim();
+  const identInput = document.getElementById("admin-login-ident");
+  const passInput = document.getElementById("admin-login-pass");
 
-  if (!ident || !password) {
+  const identifier = identInput ? identInput.value.trim() : "";
+  const password = passInput ? passInput.value.trim() : "";
+
+  if (!identifier || !password) {
     showNotification(null, "Please enter Admin username/email and password.", "danger");
     return;
   }
@@ -170,7 +241,7 @@ async function handleAdminLogin(e) {
     const res = await fetch(`${API_BASE}/api/auth/admin/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ identifier: ident, password })
+      body: JSON.stringify({ identifier, password })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Admin authentication failed.");
@@ -178,18 +249,20 @@ async function handleAdminLogin(e) {
     setSession("admin", data.user);
     closeAuthModal();
     showNotification(null, `Welcome Administrator ${data.user.username}!`, "success");
-
-    // Route to Admin Governance dashboard
-    switchTab("admin-gov-tab");
   } catch (err) {
     showNotification(null, err.message, "danger");
   }
 }
 
 // -------------------------------------------------------------
-// Navigation & Tab Switching
+// 🧭 2. Navigation & Tab Switching
 // -------------------------------------------------------------
 function switchTab(tabId) {
+  switchAppTab(tabId);
+}
+
+function switchAppTab(tabId) {
+  // Hide all sections across legacy and modern pane class names
   document.querySelectorAll(".tab-pane, .tab-content").forEach(el => {
     el.classList.remove("active");
     el.classList.add("hidden");
@@ -211,20 +284,27 @@ function switchTab(tabId) {
     targetBtn.classList.remove("text-slate-400");
   }
 
-  // Tab Context Initializers
-  if (tabId === "admin-tab") {
+  // Dynamic Trigger Initializers
+  const session = getSession();
+  const studentId = session && session.user ? session.user.id : (document.getElementById("stu-id-input")?.value || 1);
+
+  if (tabId === "admin-tab" || tabId === "tab-admin") {
     loadAllAdminData();
   } else if (tabId === "admin-gov-tab") {
-    loadAdminOnboarding();
-    loadAdminSessions();
-    loadAdminAttendanceAnalytics();
-  } else if (tabId === "student-tab") {
+    loadAdminGovernanceData();
+  } else if (tabId === "student-tab" || tabId === "tab-student") {
     loadStudentDashboardData();
+  } else if (tabId === "student-course-tab") {
+    loadStudentEnrolledCourse(studentId);
+  } else if (tabId === "student-profile-tab") {
+    loadStudentDetailedProfile(studentId);
+  } else if (tabId === "student-history-tab") {
+    loadStudentAttendanceHistory(studentId);
   }
 }
 
 // -------------------------------------------------------------
-// 🎓 STUDENT PORTAL: COURSE, DETAILED PROFILE & ATTENDANCE
+// 🎓 3. STUDENT PORTAL: Course, Sessions & Profile Workflows
 // -------------------------------------------------------------
 function loadStudentDashboardData() {
   const sidInput = document.getElementById("stu-id-input");
@@ -233,26 +313,30 @@ function loadStudentDashboardData() {
   loadStudentDetailedProfile(sid);
   loadStudentEnrolledCourse(sid);
   loadStudentAttendanceHistory(sid);
+  loadStudentSessions();
 }
 
 async function loadStudentDetailedProfile(studentId) {
+  const session = getSession();
+  const sid = studentId || (session && session.user ? session.user.id : (document.getElementById("stu-id-input")?.value || 1));
+
   try {
-    const res = await fetch(`${API_BASE}/api/student/profile/${studentId}`);
-    if (!res.ok) throw new Error(`Student #${studentId} profile not found.`);
+    const res = await fetch(`${API_BASE}/api/student/profile/${sid}`);
+    if (!res.ok) throw new Error(`Student #${sid} profile not found.`);
     const data = await res.json();
 
     // Populate Academic & Institutional Profile
-    const fullEl = document.getElementById("prof-fullname");
+    const fullEl = document.getElementById("prof-fullname") || document.getElementById("stu-name");
     const usnEl = document.getElementById("prof-usn");
     const colEl = document.getElementById("prof-college");
     const degEl = document.getElementById("prof-degree");
     const branchEl = document.getElementById("prof-branch");
     const gradEl = document.getElementById("prof-gradyear");
-    const deptEl = document.getElementById("prof-department");
+    const deptEl = document.getElementById("prof-department") || document.getElementById("stu-dept");
     const semEl = document.getElementById("prof-semester");
-    const emailEl = document.getElementById("prof-email-readonly");
-    const bioEl = document.getElementById("prof-bio");
-    const badgeEl = document.getElementById("stu-approval-badge");
+    const emailEl = document.getElementById("prof-email-readonly") || document.getElementById("stu-email");
+    const bioEl = document.getElementById("prof-bio") || document.getElementById("stu-bio");
+    const badgeEl = document.getElementById("stu-approval-badge") || document.getElementById("stu-approval");
 
     if (fullEl) fullEl.value = data.full_name || "";
     if (usnEl) usnEl.value = data.usn || "";
@@ -266,8 +350,12 @@ async function loadStudentDetailedProfile(studentId) {
     if (bioEl) bioEl.value = data.bio || "";
 
     if (badgeEl) {
-      badgeEl.innerText = `Status: ${data.approval_status}`;
-      badgeEl.className = `tag ${data.approval_status === "APPROVED" ? "ok" : data.approval_status === "REJECTED" ? "no" : ""}`;
+      if (badgeEl.tagName === "INPUT") {
+        badgeEl.value = data.approval_status;
+      } else {
+        badgeEl.innerText = `Status: ${data.approval_status}`;
+      }
+      badgeEl.className = `tag ${data.approval_status === "APPROVED" ? "ok" : data.approval_status === "REJECTED" ? "no" : "pending"}`;
     }
 
     // Populate Parent / Guardian Details
@@ -288,14 +376,14 @@ async function loadStudentDetailedProfile(studentId) {
 
 async function saveStudentDetailedProfile(e) {
   if (e && e.preventDefault) e.preventDefault();
-  const sidInput = document.getElementById("stu-id-input");
-  const studentId = sidInput ? parseInt(sidInput.value, 10) : 1;
+  const session = getSession();
+  const sid = session && session.user ? session.user.id : (document.getElementById("stu-id-input")?.value || 1);
 
   const payload = {
-    full_name: (document.getElementById("prof-fullname")?.value || "").trim(),
-    department: (document.getElementById("prof-department")?.value || "").trim(),
+    full_name: (document.getElementById("prof-fullname")?.value || document.getElementById("stu-name")?.value || "").trim(),
+    department: (document.getElementById("prof-department")?.value || document.getElementById("stu-dept")?.value || "").trim(),
     semester: parseInt(document.getElementById("prof-semester")?.value, 10) || 1,
-    bio: (document.getElementById("prof-bio")?.value || "").trim(),
+    bio: (document.getElementById("prof-bio")?.value || document.getElementById("stu-bio")?.value || "").trim(),
     college_name: (document.getElementById("prof-college")?.value || "").trim(),
     usn: (document.getElementById("prof-usn")?.value || "").trim(),
     degree: (document.getElementById("prof-degree")?.value || "B.Tech").trim(),
@@ -308,7 +396,7 @@ async function saveStudentDetailedProfile(e) {
   };
 
   try {
-    const res = await fetch(`${API_BASE}/api/student/profile/${studentId}`, {
+    const res = await fetch(`${API_BASE}/api/student/profile/${sid}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
@@ -322,10 +410,20 @@ async function saveStudentDetailedProfile(e) {
   }
 }
 
+async function saveStudentProfile() {
+  await saveStudentDetailedProfile(null);
+}
+
+async function loadStudentProfile() {
+  const session = getSession();
+  const sid = session && session.user ? session.user.id : (document.getElementById("stu-id-input")?.value || 1);
+  await loadStudentDetailedProfile(sid);
+}
+
 async function loadStudentEnrolledCourse(studentId) {
-  const sid = studentId || (document.getElementById("stu-id-input")?.value || 1);
+  const session = getSession();
+  const sid = studentId || (session && session.user ? session.user.id : (document.getElementById("stu-id-input")?.value || 1));
   const tbody = document.getElementById("student-course-sessions-body");
-  if (!tbody) return;
 
   try {
     const res = await fetch(`${API_BASE}/api/student/enrolled-course/${sid}`);
@@ -340,16 +438,17 @@ async function loadStudentEnrolledCourse(studentId) {
     if (codeEl) codeEl.innerText = data.course.code;
     if (descEl) descEl.innerText = data.course.description || "Comprehensive deep-tech curriculum.";
 
+    if (!tbody) return;
+
     if (!data.sessions || !data.sessions.length) {
-      tbody.innerHTML = `<tr><td colspan="5" class="text-center">No sessions scheduled for this course yet.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="5" class="text-center" style="color: #94a3b8;">No sessions scheduled for this course yet.</td></tr>`;
       return;
     }
 
     tbody.innerHTML = data.sessions.map(s => {
-      let badgeClass = "badge-secondary";
-      if (s.attendance_status === "PRESENT") badgeClass = "badge-success";
-      if (s.attendance_status === "SUBMITTED") badgeClass = "badge-warning";
-      if (s.attendance_status === "ABSENT") badgeClass = "badge-danger";
+      let badgeClass = "tag pending";
+      if (s.attendance_status === "PRESENT") badgeClass = "tag ok";
+      if (s.attendance_status === "ABSENT") badgeClass = "tag no";
 
       const isLocked = s.attendance_status === "PRESENT";
 
@@ -362,7 +461,7 @@ async function loadStudentEnrolledCourse(studentId) {
             <a href="${s.meeting_link}" target="_blank" style="font-size: 11px; color: #38bdf8; text-decoration: underline;">Open Link / Room</a>
           </td>
           <td>
-            <span class="badge ${badgeClass}">${s.attendance_status}</span>
+            <span class="${badgeClass}">${s.attendance_status}</span>
             ${s.remarks ? `<div style="font-size: 11px; color: #94a3b8; margin-top: 4px;">${escapeHtml(s.remarks)}</div>` : ''}
           </td>
           <td style="text-align: right;">
@@ -374,11 +473,27 @@ async function loadStudentEnrolledCourse(studentId) {
     }).join("");
 
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="5" class="text-center" style="color: #ef4444;">${err.message}</td></tr>`;
+    if (tbody) {
+      tbody.innerHTML = `<tr><td colspan="5" class="text-center" style="color: #ef4444;">${err.message}</td></tr>`;
+    }
   }
 }
 
-async function submitAttendanceClaim(studentId, sessionId, claim) {
+async function submitAttendanceClaim(param1, param2, param3) {
+  let studentId, sessionId, claim;
+
+  // Polymorphic support: submitAttendanceClaim(studentId, sessionId, claim) or submitAttendanceClaim(sessionId, claim)
+  if (param3 !== undefined) {
+    studentId = param1;
+    sessionId = param2;
+    claim = param3;
+  } else {
+    const session = getSession();
+    studentId = session && session.user ? session.user.id : (document.getElementById("stu-id-input")?.value || 1);
+    sessionId = param1;
+    claim = param2;
+  }
+
   try {
     const res = await fetch(`${API_BASE}/api/student/attendance/mark`, {
       method: "POST",
@@ -397,11 +512,13 @@ async function submitAttendanceClaim(studentId, sessionId, claim) {
 }
 
 async function loadStudentAttendanceHistory(studentId) {
+  const session = getSession();
+  const sid = studentId || (session && session.user ? session.user.id : (document.getElementById("stu-id-input")?.value || 1));
   const tbody = document.getElementById("student-attendance-tbody");
   if (!tbody) return;
 
   try {
-    const res = await fetch(`${API_BASE}/api/student/attendance/history/${studentId}`);
+    const res = await fetch(`${API_BASE}/api/student/attendance/history/${sid}`);
     const rows = await res.json();
 
     if (!rows.length) {
@@ -416,7 +533,7 @@ async function loadStudentAttendanceHistory(studentId) {
         <td>${r.timing}</td>
         <td>${r.mode}</td>
         <td>
-          <span class="tag ${r.status === 'PRESENT' ? 'ok' : r.status === 'ABSENT' ? 'no' : ''}">${r.status}</span>
+          <span class="tag ${r.status === 'PRESENT' ? 'ok' : r.status === 'ABSENT' ? 'no' : 'pending'}">${r.status}</span>
         </td>
         <td style="color: #94a3b8;">${escapeHtml(r.remarks || "-")}</td>
       </tr>
@@ -426,20 +543,90 @@ async function loadStudentAttendanceHistory(studentId) {
   }
 }
 
+async function loadStudentSessions() {
+  try {
+    const res = await fetch(`${API_BASE}/api/student/sessions`);
+    globalSessions = await res.json();
+
+    const select = document.getElementById("session-select");
+    if (!select) return;
+
+    select.innerHTML = globalSessions
+      .map(s => `<option value="${s.id}">${s.topic} (${s.session_date})</option>`)
+      .join("");
+
+    displayStudentSessionDetails();
+  } catch (err) {
+    console.error("Failed to load student sessions:", err);
+  }
+}
+
+function displayStudentSessionDetails() {
+  const select = document.getElementById("session-select");
+  if (!select) return;
+
+  const sid = parseInt(select.value, 10);
+  const session = globalSessions.find(s => s.id === sid);
+  const card = document.getElementById("session-details-card");
+
+  if (!session) {
+    if (card) card.classList.add("hidden");
+    return;
+  }
+
+  if (card) card.classList.remove("hidden");
+
+  const topicEl = document.getElementById("sess-card-topic");
+  const descEl = document.getElementById("sess-card-desc");
+  const timeEl = document.getElementById("sess-card-time");
+  const linkEl = document.getElementById("sess-card-link");
+  const modeEl = document.getElementById("sess-card-mode");
+
+  if (topicEl) topicEl.textContent = session.topic;
+  if (descEl) descEl.textContent = session.description || "No prerequisites specified.";
+  if (timeEl) timeEl.textContent = `${session.session_date} | ${session.timing}`;
+
+  if (linkEl) {
+    linkEl.href = session.meeting_link;
+    linkEl.textContent = session.meeting_link;
+  }
+
+  if (modeEl) {
+    modeEl.textContent = session.mode;
+    modeEl.className = `tag ${session.mode === "Online" ? "ok" : ""}`;
+  }
+}
+
+async function submitStudentAttendance() {
+  const sidInput = document.getElementById("stu-id-input");
+  const sessSelect = document.getElementById("session-select");
+
+  const session = getSession();
+  const studentId = session && session.user ? session.user.id : (sidInput ? parseInt(sidInput.value, 10) : 1);
+  const sessionId = sessSelect ? parseInt(sessSelect.value, 10) : null;
+
+  if (!sessionId) {
+    showNotification(null, "Please select an active session first.", "danger");
+    return;
+  }
+
+  await submitAttendanceClaim(studentId, sessionId, "PRESENT");
+}
+
 // -------------------------------------------------------------
-// Registration & Dual-OTP Verification Handlers
+// 📝 4. Student Registration & Dual-OTP Verification Handlers
 // -------------------------------------------------------------
 async function handleRegistration(e) {
   if (e && e.preventDefault) e.preventDefault();
   const notify = document.getElementById("notifyMessage");
   const submitBtn = document.getElementById("submitRegBtn");
 
-  const nameInput = document.getElementById("stuName");
-  const emailInput = document.getElementById("stuEmail");
-  const phoneInput = document.getElementById("stuPhone");
-  const deptInput = document.getElementById("stuDept");
-  const semInput = document.getElementById("stuSem");
-  const passInput = document.getElementById("stuPassword");
+  const nameInput = document.getElementById("stuName") || document.getElementById("reg-name");
+  const emailInput = document.getElementById("stuEmail") || document.getElementById("reg-email");
+  const phoneInput = document.getElementById("stuPhone") || document.getElementById("reg-phone");
+  const deptInput = document.getElementById("stuDept") || document.getElementById("reg-dept");
+  const semInput = document.getElementById("stuSem") || document.getElementById("reg-sem");
+  const passInput = document.getElementById("stuPassword") || document.getElementById("reg-password");
 
   const payload = {
     full_name: nameInput ? nameInput.value.trim() : "",
@@ -470,13 +657,13 @@ async function handleRegistration(e) {
 
     if (!res.ok) throw new Error(data.detail || "Registration failed");
 
-    // Cache credentials for subsequent verification
+    // Cache credentials for OTP verification
     activeStudent.phone = payload.phone;
     activeStudent.email = payload.email;
     activeStudent.phoneVerified = false;
     activeStudent.emailVerified = false;
 
-    showNotification(notify, `${data.message} Verification OTPs sent.`, "success");
+    showNotification(notify, `${data.message} OTPs sent to ${payload.phone} and ${payload.email}`, "success");
 
     const phoneLabel = document.getElementById("displayPhoneLabel");
     const emailLabel = document.getElementById("displayEmailLabel");
@@ -490,7 +677,7 @@ async function handleRegistration(e) {
       const el = document.getElementById(id);
       if (el) el.innerText = "";
     });
-    ["phoneOtpInput", "emailOtpInput"].forEach(id => {
+    ["phoneOtpInput", "emailOtpInput", "verify-phone-otp", "verify-email-otp"].forEach(id => {
       const el = document.getElementById(id);
       if (el) { el.value = ""; el.disabled = false; }
     });
@@ -517,7 +704,15 @@ async function verifyOTP(type) {
   const isPhone = type === "phone";
 
   let identifier = isPhone ? activeStudent.phone : activeStudent.email;
-  const inputEl = document.getElementById(isPhone ? "phoneOtpInput" : "emailOtpInput");
+  if (!identifier) {
+    const fallbackInput = document.getElementById(isPhone ? "verify-phone-num" : "verify-email-addr");
+    if (fallbackInput && fallbackInput.value.trim()) {
+      identifier = fallbackInput.value.trim();
+    }
+  }
+
+  const inputEl = document.getElementById(isPhone ? "phoneOtpInput" : "emailOtpInput") ||
+                  document.getElementById(isPhone ? "verify-phone-otp" : "verify-email-otp");
   const otp = inputEl ? inputEl.value.trim() : "";
 
   if (!otp || otp.length < 4) {
@@ -553,10 +748,9 @@ async function verifyOTP(type) {
     if (isPhone) activeStudent.phoneVerified = true;
     else activeStudent.emailVerified = true;
 
-    loadAnalytics();
-
     if (activeStudent.phoneVerified && activeStudent.emailVerified) {
-      showNotification(notify, "🎉 All credentials verified! Student onboarding pending admin approval.", "success");
+      showNotification(notify, "🎉 All credentials verified! You can now sign in to your dashboard.", "success");
+      setTimeout(() => showAuthView("stu-login"), 1500);
       fetchTableData();
     }
 
@@ -569,6 +763,13 @@ async function handleResendOTP(channel) {
   const notify = document.getElementById("notifyMessage");
   const isPhone = channel === "phone";
   let identifier = isPhone ? activeStudent.phone : activeStudent.email;
+
+  if (!identifier) {
+    const fallbackInput = document.getElementById(isPhone ? "verify-phone-num" : "verify-email-addr");
+    if (fallbackInput && fallbackInput.value.trim()) {
+      identifier = fallbackInput.value.trim();
+    }
+  }
 
   if (!identifier) {
     showNotification(notify, "No active registration. Please enter your email or phone first.", "danger");
@@ -623,9 +824,6 @@ function startCooldownTimer(channel, seconds) {
   else activeStudent.emailTimer = timer;
 }
 
-// -------------------------------------------------------------
-// Developer / Active OTP Inspector
-// -------------------------------------------------------------
 async function fetchActiveOtpDebug() {
   const container = document.getElementById("debugCodesContainer");
   if (!container) return;
@@ -657,8 +855,14 @@ async function fetchActiveOtpDebug() {
 }
 
 // -------------------------------------------------------------
-// 🛡️ ADMIN GOVERNANCE HANDLERS
+// 🛡️ 5. ADMIN GOVERNANCE & ROSTER WORKFLOWS
 // -------------------------------------------------------------
+async function loadAdminGovernanceData() {
+  loadAdminOnboarding();
+  loadAdminSessionsDropdown();
+  loadAdminAttendanceAnalytics();
+}
+
 async function loadAdminOnboarding() {
   const filterSelect = document.getElementById("admin-onboarding-filter");
   const filter = filterSelect ? filterSelect.value : "ALL";
@@ -682,7 +886,7 @@ async function loadAdminOnboarding() {
         <td>${escapeHtml(s.phone)}</td>
         <td>E: ${s.email_verified ? "✅" : "❌"} | P: ${s.phone_verified ? "✅" : "❌"}</td>
         <td>
-          <span class="tag ${s.approval_status === 'APPROVED' ? 'ok' : s.approval_status === 'REJECTED' ? 'no' : ''}">${s.approval_status}</span>
+          <span class="tag ${s.approval_status === 'APPROVED' ? 'ok' : s.approval_status === 'REJECTED' ? 'no' : 'pending'}">${s.approval_status}</span>
         </td>
         <td style="text-align: right;">
           <button onclick="actionOnboarding(${s.id}, 'APPROVED')" class="btn btn-success btn-sm">Approve</button>
@@ -714,14 +918,21 @@ async function actionOnboarding(studentId, decision) {
 }
 
 async function publishAcademicSession() {
+  const topicInput = document.getElementById("new-sess-topic");
+  const dateInput = document.getElementById("new-sess-date");
+  const timeInput = document.getElementById("new-sess-time");
+  const modeInput = document.getElementById("new-sess-mode");
+  const linkInput = document.getElementById("new-sess-link");
+  const descInput = document.getElementById("new-sess-desc");
+
   const payload = {
     course_id: 1,
-    topic: (document.getElementById("new-sess-topic")?.value || "").trim(),
-    session_date: document.getElementById("new-sess-date")?.value || "",
-    timing: (document.getElementById("new-sess-time")?.value || "").trim(),
-    mode: document.getElementById("new-sess-mode")?.value || "Online",
-    meeting_link: (document.getElementById("new-sess-link")?.value || "").trim(),
-    description: (document.getElementById("new-sess-desc")?.value || "").trim(),
+    topic: topicInput ? topicInput.value.trim() : "",
+    session_date: dateInput ? dateInput.value : "",
+    timing: timeInput ? timeInput.value.trim() : "10:00 AM - 12:30 PM",
+    mode: modeInput ? modeInput.value : "Online",
+    meeting_link: linkInput ? linkInput.value.trim() : "",
+    description: descInput ? descInput.value.trim() : "Curriculum Training Lecture",
   };
 
   if (!payload.topic || !payload.session_date || !payload.meeting_link) {
@@ -739,7 +950,7 @@ async function publishAcademicSession() {
     if (!res.ok) throw new Error(data.detail || "Session creation failed");
 
     showNotification(null, "Academic session published successfully!", "success");
-    loadAdminSessions();
+    loadAdminSessionsDropdown();
     loadAdminAttendanceAnalytics();
   } catch (err) {
     showNotification(null, err.message, "danger");
@@ -747,6 +958,10 @@ async function publishAcademicSession() {
 }
 
 async function loadAdminSessions() {
+  await loadAdminSessionsDropdown();
+}
+
+async function loadAdminSessionsDropdown() {
   try {
     const res = await fetch(`${API_BASE}/api/student/sessions`);
     const sessions = await res.json();
@@ -784,7 +999,7 @@ async function loadAdminRoster() {
         <td>#${r.student_id}</td>
         <td><strong>${escapeHtml(r.full_name)}</strong></td>
         <td>
-          <span class="tag ${r.status === 'PRESENT' ? 'ok' : r.status === 'ABSENT' ? 'no' : ''}">${r.status}</span>
+          <span class="tag ${r.status === 'PRESENT' ? 'ok' : r.status === 'ABSENT' ? 'no' : 'pending'}">${r.status}</span>
         </td>
         <td style="color: #94a3b8;">${escapeHtml(r.remarks || "-")}</td>
         <td style="text-align: right;">
@@ -847,7 +1062,7 @@ async function loadAdminAttendanceAnalytics() {
 }
 
 // -------------------------------------------------------------
-// Analytics & Chart.js Visualizations
+// 📊 6. Analytics & Student Directory
 // -------------------------------------------------------------
 async function loadAnalytics() {
   try {
@@ -869,7 +1084,6 @@ async function loadAnalytics() {
     const deptValues = Object.values(data.department_distribution || {});
 
     if (deptChartInstance) deptChartInstance.destroy();
-
     const deptCanvas = document.getElementById("deptChart");
     if (deptCanvas && typeof Chart !== "undefined") {
       deptChartInstance = new Chart(deptCanvas.getContext("2d"), {
@@ -899,7 +1113,6 @@ async function loadAnalytics() {
     const verifyValues = Object.values(data.verification_breakdown || {});
 
     if (verifyChartInstance) verifyChartInstance.destroy();
-
     const verifyCanvas = document.getElementById("verifyChart");
     if (verifyCanvas && typeof Chart !== "undefined") {
       verifyChartInstance = new Chart(verifyCanvas.getContext("2d"), {
@@ -930,9 +1143,6 @@ async function loadAnalytics() {
   }
 }
 
-// -------------------------------------------------------------
-// Paginated Student Directory Operations
-// -------------------------------------------------------------
 async function fetchTableData() {
   const searchInput = document.getElementById("searchBox");
   const deptInput = document.getElementById("deptFilter");
@@ -1028,7 +1238,7 @@ function loadAllAdminData() {
 }
 
 // -------------------------------------------------------------
-// Utilities & Global Notification Bridge
+// 🛠️ 7. Utilities & Notifications
 // -------------------------------------------------------------
 function showNotification(el, message, type) {
   if (el) {
@@ -1063,34 +1273,56 @@ function escapeHtml(text) {
 }
 
 // -------------------------------------------------------------
-// Global Window Aliases & Initializer
+// 🌐 8. Global Window Registration & Lifecycle Bootstrapper
 // -------------------------------------------------------------
-window.registerStudent = handleRegistration;
-window.verifyOTP = verifyOTP;
-window.handleResendOTP = handleResendOTP;
-window.publishAcademicSession = publishAcademicSession;
-window.submitAttendanceClaim = submitAttendanceClaim;
-window.loadStudentDashboardData = loadStudentDashboardData;
-window.loadStudentEnrolledCourse = loadStudentEnrolledCourse;
-window.saveStudentDetailedProfile = saveStudentDetailedProfile;
+window.showAuthView = showAuthView;
+window.switchTab = switchTab;
+window.switchAppTab = switchAppTab;
 window.openAuthModal = openAuthModal;
 window.closeAuthModal = closeAuthModal;
 window.switchModalAuthTab = switchModalAuthTab;
+
 window.handleStudentLogin = handleStudentLogin;
 window.handleAdminLogin = handleAdminLogin;
-window.actionOnboarding = actionOnboarding;
-window.reviewAttendance = reviewAttendance;
-window.loadAdminRoster = loadAdminRoster;
-window.loadAdminOnboarding = loadAdminOnboarding;
-window.loadAdminAttendanceAnalytics = loadAdminAttendanceAnalytics;
+window.logoutSession = logoutSession;
+window.clearSession = clearSession;
+
+window.handleRegistration = handleRegistration;
+window.registerStudent = handleRegistration;
+window.verifyOTP = verifyOTP;
+window.verifyOtp = verifyOTP;
+window.handleResendOTP = handleResendOTP;
+window.resendOtp = handleResendOTP;
 window.fetchActiveOtpDebug = fetchActiveOtpDebug;
-window.changePage = changePage;
+
+window.loadStudentDashboardData = loadStudentDashboardData;
+window.loadStudentProfile = loadStudentProfile;
+window.saveStudentProfile = saveStudentProfile;
+window.loadStudentDetailedProfile = loadStudentDetailedProfile;
+window.saveStudentDetailedProfile = saveStudentDetailedProfile;
+window.loadStudentEnrolledCourse = loadStudentEnrolledCourse;
+window.submitAttendanceClaim = submitAttendanceClaim;
+window.loadStudentAttendanceHistory = loadStudentAttendanceHistory;
+window.loadStudentSessions = loadStudentSessions;
+window.displayStudentSessionDetails = displayStudentSessionDetails;
+window.submitStudentAttendance = submitStudentAttendance;
+
+window.loadAllAdminData = loadAllAdminData;
+window.loadAdminGovernanceData = loadAdminGovernanceData;
+window.loadAdminOnboarding = loadAdminOnboarding;
+window.actionOnboarding = actionOnboarding;
+window.publishAcademicSession = publishAcademicSession;
+window.publishSession = publishAcademicSession;
+window.loadAdminSessions = loadAdminSessions;
+window.loadAdminSessionsDropdown = loadAdminSessionsDropdown;
+window.loadAdminRoster = loadAdminRoster;
+window.reviewAttendance = reviewAttendance;
+window.loadAdminAttendanceAnalytics = loadAdminAttendanceAnalytics;
+
 window.debounceSearch = debounceSearch;
 window.resetAndFetchTable = resetAndFetchTable;
-window.loadAllAdminData = loadAllAdminData;
-window.switchTab = switchTab;
+window.changePage = changePage;
 
 window.addEventListener("DOMContentLoaded", () => {
   restoreSession();
-  loadAllAdminData();
 });
